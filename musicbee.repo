@@ -1,0 +1,7 @@
+[musicbee-linux]
+name=MusicBee on Linux
+baseurl=https://fiso64.github.io/musicbee-linux/rpm/
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://fiso64.github.io/musicbee-linux/RPM-GPG-KEY-musicbee
