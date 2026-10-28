@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=MusicBee
+GenericName=Music Player
+Comment=Unofficial MusicBee Portable via Wine
+Exec=musicbee desktop-setup
+Terminal=true
+Icon=multimedia-audio-player
+Categories=AudioVideo;Audio;Player;
+StartupNotify=true
+StartupWMClass=musicbee.exe

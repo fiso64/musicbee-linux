@@ -1,0 +1,14 @@
+name: Unit tests
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test distro-neutral CLI
+        run: |
+          python3 -m py_compile src/musicbee.py
+          python3 -m unittest discover -s tests -v
+          bash -n scripts/*.sh
