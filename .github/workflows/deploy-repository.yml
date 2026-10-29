@@ -25,7 +25,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Install verification tools
-        run: dnf -y install git python3 rpm gnupg2 gh tar gzip
+        run: dnf -y install git python3 rpm gnupg2 gh tar gzip diffutils
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
@@ -68,7 +68,7 @@ jobs:
           signed=(build/site/rpm/*.rpm)
           asset=(build/download/*.rpm)
           [[ ${#signed[@]} -eq 1 && ${#asset[@]} -eq 1 ]]
-          [[ "$(rpm -qp --qf '%{VERSION}' "${signed[0]}")" == "${RELEASE_TAG#v}" ]]
+          [[ "$(rpm --define '_keyring fs' --define "_keyringpath $GNUPGHOME/keyring" -qp --qf '%{VERSION}' "${signed[0]}")" == "${RELEASE_TAG#v}" ]]
           cmp "${signed[0]}" "${asset[0]}"
           rpmkeys --define '_keyring fs' --define "_keyringpath $GNUPGHOME/keyring" \
             --define '_pkgverify_level signature' --checksig "${signed[0]}"
