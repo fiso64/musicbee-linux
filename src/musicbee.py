@@ -163,11 +163,11 @@ def configure(args: argparse.Namespace, paths: dict[str, Path]) -> None:
             print(f"  {paint(name, '1')}  {paint(tweak_value(config, name), '32')}")
             print(f"    {description}")
             print()
-        print("Use: musicbee config <option> info | <value>")
+        print("Use: musicbee-manage config <option> info | <value>")
         return
     name = args.option
     if name not in TWEAKS:
-        die(f"Unknown setting {name!r}. Run 'musicbee config' to list settings.")
+        die(f"Unknown setting {name!r}. Run 'musicbee-manage config' to list settings.")
     default, values, description = TWEAKS[name]
     current = tweak_value(config, name)
     if args.value in (None, "info"):
@@ -203,6 +203,29 @@ def configure(args: argparse.Namespace, paths: dict[str, Path]) -> None:
 TOOL_BRIDGE_MARKER = "# musicbee-linux native tool bridge\n"
 
 
+def tool_bridge_script(name: str, paths: dict[str, Path]) -> str:
+    manager = paths["bin"].with_name("musicbee-manage")
+    log = paths["state"] / "native-tools.log"
+    return ("#!/bin/sh\n" + TOOL_BRIDGE_MARKER +
+            f"exec {shlex.quote(str(manager))} tools-dispatch {shlex.quote(name)} \"$@\" 2>>{shlex.quote(str(log))}\n")
+
+
+def refresh_tool_bridges(paths: dict[str, Path], config: dict) -> None:
+    directory = paths["prefix"] / "drive_c" / "musicbee-linux-tools"
+    if directory.is_symlink() or not directory.is_dir():
+        return
+    for name in native_tools(config):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", name):
+            continue
+        bridge = directory / tool_bridge_name(name)
+        if bridge.is_symlink() or not bridge.is_file():
+            continue
+        current = bridge.read_text(encoding="utf-8", errors="replace")
+        script = tool_bridge_script(name, paths)
+        if TOOL_BRIDGE_MARKER in current.splitlines(keepends=True)[:2] and current != script:
+            bridge.write_text(script, encoding="utf-8")
+
+
 def tool_bridge_name(name: str) -> str:
     return f"{name}.exe"
 
@@ -227,7 +250,7 @@ def manage_tools(args: argparse.Namespace, paths: dict[str, Path]) -> None:
     registered = native_tools(config)
     if args.action == "list":
         if not registered:
-            print("No native tools configured. Add one with: musicbee tools add NAME 'COMMAND'")
+            print("No native tools configured. Add one with: musicbee-manage tools add NAME 'COMMAND'")
         for name, command in sorted(registered.items()):
             print(f"{name}: {shlex.join(command)}")
         return
@@ -244,7 +267,7 @@ def manage_tools(args: argparse.Namespace, paths: dict[str, Path]) -> None:
         return
     command = shlex.split(args.tool_command)
     if not command or not command[0]:
-        die("Provide a nonempty command, for example: musicbee tools add picard 'flatpak run org.musicbrainz.Picard'.")
+        die("Provide a nonempty command, for example: musicbee-manage tools add picard 'flatpak run org.musicbrainz.Picard'.")
     require_ready(paths["prefix"])
     drive = paths["prefix"] / "drive_c"
     if drive.is_symlink() or not drive.is_dir():
@@ -256,13 +279,10 @@ def manage_tools(args: argparse.Namespace, paths: dict[str, Path]) -> None:
     bridge = bridge_dir / tool_bridge_name(name)
     if bridge.is_symlink() or (bridge.exists() and (not bridge.is_file() or TOOL_BRIDGE_MARKER not in bridge.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)[:2])):
         die(f"Refusing to overwrite an existing file: {bridge}")
-    launcher = paths["bin"]
+    launcher = paths["bin"].with_name("musicbee-manage")
     if not launcher.is_file():
-        die(f"MusicBee launcher not found: {launcher}. Run musicbee launcher first.")
-    log = paths["state"] / "native-tools.log"
-    bridge.write_text("#!/bin/sh\n" + TOOL_BRIDGE_MARKER +
-                      f"exec {shlex.quote(str(launcher))} tools-dispatch {shlex.quote(name)} \"$@\" 2>>{shlex.quote(str(log))}\n",
-                      encoding="utf-8")
+        die(f"MusicBee launcher not found: {launcher}. Run musicbee-manage launcher first.")
+    bridge.write_text(tool_bridge_script(name, paths), encoding="utf-8")
     bridge.chmod(0o755)
     registered[name] = command
     config["native_tools"] = registered
@@ -317,7 +337,7 @@ def configure_explorer_redirect(paths: dict[str, Path], enabled: bool) -> None:
         if target.exists():
             target.unlink()
         return
-    launcher = paths["bin"]
+    launcher = paths["bin"].with_name("musicbee-manage")
     if not launcher.is_file():
         print(f"Warning: native file manager unavailable; launcher missing: {launcher}", file=sys.stderr)
         return
@@ -478,7 +498,7 @@ def manage_tabs(args: argparse.Namespace, paths: dict[str, Path]) -> None:
                     return html.unescape(match.group(1).decode("utf-8", errors="replace")).strip() if match else ""
                 label = field(b"TextOverride") or field(b"CustLayoutName") or f"Category {field(b'FolderCategory') or '?'}"
                 print(f"  {index}. {label}")
-            print("Move a tab: musicbee tabs CURRENT_POSITION NEW_POSITION")
+            print("Move a tab: musicbee-manage tabs CURRENT_POSITION NEW_POSITION")
             return
         source, destination = args.source - 1, args.destination - 1
         if not (0 <= source < len(blocks) and 0 <= destination < len(blocks)):
@@ -648,6 +668,10 @@ def install_self(binary: Path) -> None:
             print(f"Updating installed script at {binary}")
         shutil.copy2(source, binary)
     binary.chmod(binary.stat().st_mode | 0o755)
+    manager = binary.with_name("musicbee-manage")
+    if source != manager and (not manager.exists() or not source.samefile(manager)):
+        shutil.copy2(source, manager)
+    manager.chmod(manager.stat().st_mode | 0o755)
 
 
 def desktop_quote(value: str) -> str:
@@ -672,7 +696,7 @@ def extract_musicbee_icon(app: Path, state: Path) -> Path | None:
     if not exe.is_file():
         return icon if icon.is_file() else None
     if not shutil.which("wrestool") or not shutil.which("icotool"):
-        print("Note: Install icoutils, then run 'musicbee launcher' for the actual MusicBee icon.")
+        print("Note: Install icoutils, then run 'musicbee-manage launcher' for the actual MusicBee icon.")
         return icon if icon.is_file() else None
 
     with tempfile.TemporaryDirectory(prefix="musicbee-icon-") as temp:
@@ -720,12 +744,13 @@ def extract_musicbee_icon(app: Path, state: Path) -> Path | None:
 
 def make_launcher(binary: Path, desktop: Path, icon: Path | None = None, *, setup_needed: bool = False) -> None:
     desktop.parent.mkdir(parents=True, exist_ok=True)
+    command = f"{desktop_quote(str(binary.with_name('musicbee-manage')))} desktop-setup" if setup_needed else desktop_quote(str(binary))
     desktop.write_text(
         "[Desktop Entry]\n"
         "Type=Application\n"
         "Name=MusicBee\n"
         "Comment=MusicBee via Wine\n"
-        f"Exec={desktop_quote(str(binary))} {'desktop-setup' if setup_needed else 'run'}\n"
+        f"Exec={command}\n"
         f"Terminal={'true' if setup_needed else 'false'}\n"
         f"Icon={icon if icon and icon.is_file() else 'multimedia-audio-player'}\n"
         "Categories=AudioVideo;Audio;Player;\n"
@@ -762,54 +787,67 @@ def ensure_bootstrap(prefix: Path, *, refresh: bool) -> None:
         print("Existing Wine prefix found; skipping Winetricks dependencies.")
 
 
-def setup(args: argparse.Namespace, paths: dict[str, Path]) -> None:
+def initialize_prefix(paths: dict[str, Path]) -> None:
     state, prefix = paths["state"], paths["prefix"]
-    old = read_config(state)
-    source = args.music_dir or old.get("music_dir") or str(paths["home"] / "Music")
-    winpath = args.windows_music_path or old.get("windows_music_path")
-    if not winpath:
-        winpath = f"C:\\Users\\{getpass.getuser()}\\Music"
-    parse_windows_path(winpath)  # Fail before Wine does any work.
-    if not args.music_dir and not old.get("music_dir") and Path(source).expanduser() == paths["home"] / "Music":
-        Path(source).expanduser().mkdir(parents=True, exist_ok=True)
-    try:
-        host = music_host_dir(source, prefix)
-    except (OSError, RuntimeError) as exc:
-        die(f"Cannot access music directory {source!r}: {exc}")
-    print(f"Linux music directory: {host}")
-    print(f"Windows library location: {winpath}")
-    ensure_bootstrap(prefix, refresh=args.refresh_dependencies)
-    version = tweak_value(old, "windows-version")
+    config = read_config(state)
+    ensure_bootstrap(prefix, refresh=False)
+    version = tweak_value(config, "windows-version")
     apply_windows_version(version, prefix)
-    old.setdefault("tweaks", {})["windows-version"] = version
-    if tweak_value(old, "allfonts") == "on":
-        apply_font_tweak("allfonts", "on", prefix)
-    if tweak_value(old, "font-smoothing") == "on":
-        apply_font_tweak("font-smoothing", "on", prefix)
-    target = update_mapping(prefix, host, winpath, old)
+    config.setdefault("tweaks", {})["windows-version"] = version
+    for name in ("allfonts", "font-smoothing"):
+        if tweak_value(config, name) == "on":
+            apply_font_tweak(name, "on", prefix)
     install_self(paths["bin"])
     make_launcher(paths["bin"], paths["desktop"], extract_musicbee_icon(paths["app"], state),
                   setup_needed=not (paths["app"] / "MusicBee.exe").is_file())
-    print(f"Desktop launcher: {paths['desktop']}")
-    write_config(state, {**old, "schema": 1, "music_dir": str(host), "windows_music_path": winpath})
+    write_config(state, {**config, "schema": 1})
     record_environment(state, prefix)
-    print(f"Mapped {winpath} -> {host} (Wine link: {target})")
-    print("\nWine setup complete.")
+    print("Wine setup complete.")
+
+
+def repair_dependencies(paths: dict[str, Path]) -> None:
+    prefix = paths["prefix"]
+    require_ready(prefix)
+    with (prefix / ".musicbee.launch.lock").open("a+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            die("Close MusicBee before repairing dependencies.")
+        ensure_bootstrap(prefix, refresh=True)
+        apply_windows_version(tweak_value(read_config(paths["state"]), "windows-version"), prefix)
+    record_environment(paths["state"], prefix)
+    print("Dependency setup complete.")
 
 
 def require_ready(prefix: Path) -> None:
     if not (prefix / ".musicbee-bootstrap-complete").is_file():
-        die("Wine prefix not initialized; run: musicbee init")
+        die("Wine prefix not initialized; run: musicbee-manage init")
 
 
-def validate_mapping(paths: dict[str, Path], config: dict | None = None) -> None:
-    if config is None:
-        config = read_config(paths["state"])
-    if config.get("music_dir") and config.get("windows_music_path"):
-        target = mapping_target(paths["prefix"], config["windows_music_path"], create_parents=False)
-        source = Path(config["music_dir"])
-        if not source.is_dir() or not symlink_points_to(target, source):
-            die(f"Music mapping missing or inaccessible: {config['windows_music_path']} -> {source}. Run setup again.")
+def configure_music_dir(args: argparse.Namespace, paths: dict[str, Path]) -> None:
+    prefix, state = paths["prefix"], paths["state"]
+    require_ready(prefix)
+    config = read_config(state)
+    if args.directory is None:
+        if args.wine_music_path:
+            die("Provide a music directory when specifying a Windows path.")
+        print(f"Music directory: {config.get('music_dir', '(not configured by this tool)')}")
+        print(f"Windows path: {config.get('windows_music_path', '(not configured by this tool)')}")
+        return
+    windows_path = args.wine_music_path or config.get("windows_music_path") or f"C:\\Users\\{getpass.getuser()}\\Music"
+    parse_windows_path(windows_path)
+    try:
+        host = music_host_dir(args.directory, prefix)
+    except (OSError, RuntimeError) as exc:
+        die(f"Cannot access music directory {args.directory!r}: {exc}")
+    with (prefix / ".musicbee.launch.lock").open("a+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            die("Close MusicBee before changing the music directory.")
+        target = update_mapping(prefix, host, windows_path, config)
+        write_config(state, {**config, "music_dir": str(host), "windows_music_path": windows_path})
+    print(f"Mapped {windows_path} -> {host} (Wine link: {target})")
 
 
 def sha256(path: Path) -> str:
@@ -825,13 +863,12 @@ def install(args: argparse.Namespace, paths: dict[str, Path]) -> None:
     if not source.is_file():
         die(f"Archive is not a file: {source}")
     if not (paths["app"] / "MusicBee.exe").is_file():
-        first_launch(argparse.Namespace(music_dir=None, wine_music_path=None, archive=str(source),
+        first_launch(argparse.Namespace(archive=str(source),
                                         accept_license=False, no_launch=True), paths)
         print("Installed. Launch from your app menu or run: musicbee")
         return
     validate_portable_archive(source)
     require_ready(paths["prefix"])
-    validate_mapping(paths)
     digest = sha256(source)
     keep_backup = getattr(args, "keep_backup", None)
     if keep_backup is None:
@@ -876,7 +913,6 @@ def run(args: argparse.Namespace, paths: dict[str, Path]) -> None:
     prefix, app = paths["prefix"], paths["app"]
     require_ready(prefix)
     config = read_config(paths["state"])
-    validate_mapping(paths, config)
     require_commands("wine")
     if not (app / "MusicBee.exe").is_file():
         die(r"MusicBee.exe not found at C:\MusicBee; use the install command first.")
@@ -905,11 +941,9 @@ def run(args: argparse.Namespace, paths: dict[str, Path]) -> None:
             apply_windows_version(version, prefix)
             config.setdefault("tweaks", {})["windows-version"] = version
             write_config(paths["state"], config)
+        refresh_tool_bridges(paths, config)
         configure_explorer_redirect(paths, tweak_value(config, "native-file-manager") == "on")
-        extra = args.musicbee_args
-        if extra and extra[0] == "--":
-            extra = extra[1:]
-        call(["wine", "MusicBee.exe", *extra], env=env, cwd=app)
+        call(["wine", "MusicBee.exe", *args.musicbee_args], env=env, cwd=app)
 
 
 MPRISBEE_VERSION = "1.0.3"
@@ -1147,7 +1181,7 @@ def ensure_media_controls(paths: dict[str, Path]) -> None:
         media_controls(argparse.Namespace(action="install", archive=None, sha256=None), paths)
     except (SetupError, OSError, subprocess.CalledProcessError, zipfile.BadZipFile, ValueError) as exc:
         print(f"Warning: could not install MPRISBee: {exc}. "
-              "Retry with: musicbee media-controls install", file=sys.stderr)
+              "Retry with: musicbee-manage media-controls install", file=sys.stderr)
 
 
 def backup(args: argparse.Namespace, paths: dict[str, Path]) -> None:
@@ -1174,15 +1208,9 @@ def backup(args: argparse.Namespace, paths: dict[str, Path]) -> None:
 
 def status(paths: dict[str, Path]) -> None:
     prefix = paths["prefix"]
-    config = read_config(paths["state"])
     print(f"Prefix: {prefix}")
     print(f"Bootstrapped: {(prefix / '.musicbee-bootstrap-complete').exists()}")
     print(f"MusicBee installed: {(paths['app'] / 'MusicBee.exe').exists()}")
-    print(f"Music directory: {config.get('music_dir', '(not configured)')}")
-    print(f"Windows path: {config.get('windows_music_path', '(not configured)')}")
-    if config.get("windows_music_path"):
-        target = mapping_target(prefix, config["windows_music_path"], create_parents=False)
-        print(f"Wine link: {target} -> {os.readlink(target) if target.is_symlink() else '(missing)'}")
 
 
 
@@ -1218,7 +1246,7 @@ def confirm_license(state: Path, *, accept: bool = False) -> None:
             elif shutil.which("zenity"):
                 accept = subprocess.run(["zenity", "--question", "--title=Unofficial MusicBee", f"--text={message}"], check=False).returncode == 0
     if not accept:
-        die("Installation cancelled. To accept from a terminal: musicbee init --accept-license")
+        die("Installation cancelled. To accept from a terminal: musicbee-manage init --accept-license")
     state.mkdir(parents=True, exist_ok=True)
     write_json_atomic(marker, {"accepted": True, "recorded_at": datetime.now(timezone.utc).isoformat()})
 
@@ -1381,7 +1409,7 @@ def packaged_archive(paths: dict[str, Path], override: str | None = None) -> Pat
         archive = Path(os.environ["MUSICBEE_ARCHIVE_OVERRIDE"]).expanduser()
     else:
         die("Download the MusicBee Portable ZIP from https://www.getmusicbee.com/downloads/\n"
-            "Then run: musicbee install /path/to/MusicBeePortable.zip")
+            "Then run: musicbee-manage install /path/to/MusicBeePortable.zip")
     if not archive.is_file():
         die(f"MusicBee archive not found: {archive}. Download it from https://www.getmusicbee.com/downloads/.")
     return archive
@@ -1400,13 +1428,7 @@ def first_launch(args: argparse.Namespace, paths: dict[str, Path]) -> None:
             validate_portable_archive(archive)
             confirm_license(state, accept=args.accept_license)
             if not (paths["prefix"] / ".musicbee-bootstrap-complete").is_file() or not (state / "config.json").is_file():
-                setup(argparse.Namespace(
-                    music_dir=args.music_dir,
-                    windows_music_path=args.wine_music_path,
-                    refresh_dependencies=False,
-                ), paths)
-            else:
-                validate_mapping(paths)
+                initialize_prefix(paths)
             unpack_portable(archive, paths["app"])
             regenerate_launcher(paths)
             write_json_atomic(state / "portable-source.json", {"sha256": sha256(archive), "archive": archive.name})
@@ -1419,32 +1441,20 @@ def first_launch(args: argparse.Namespace, paths: dict[str, Path]) -> None:
 
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Unofficial MusicBee Portable on Linux using Wine.",
+        prog="musicbee-manage",
+        description="Manage MusicBee on Linux using Wine.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Download MusicBee Portable, then run: musicbee install /path/to/MusicBeePortable.zip\n"
-            "To customize music mapping: musicbee setup --music-dir ~/Music\n"
-            "Media controls: installed automatically; check with musicbee media-controls status\n"
-            "Keep upstream MusicBee issues separate from Linux packaging issues."
+            "Download MusicBee Portable, then run: musicbee-manage install /path/to/MusicBeePortable.zip\n"
         ),
     )
-    sub = parser.add_subparsers(dest="command", metavar="{init,setup,install,run,config,tabs,tools,backup,launcher,media-controls,status}")
+    sub = parser.add_subparsers(dest="command", metavar="{install,init,repair-dependencies,music-dir,config,tabs,tools,backup,launcher,media-controls,status}")
     sub.add_parser("desktop-setup")
     explorer = sub.add_parser("explorer-dispatch")
     explorer.add_argument("arguments", nargs=argparse.REMAINDER)
     dispatch = sub.add_parser("tools-dispatch")
     dispatch.add_argument("name")
     dispatch.add_argument("files", nargs="+")
-    ini = sub.add_parser("init", help="Set up Wine and install MusicBee from a downloaded archive")
-    ini.add_argument("--music-dir", help="Host music directory (default: ~/Music)")
-    ini.add_argument("--wine-music-path", help=r"Windows library path (default: C:\Users\<user>\Music)")
-    ini.add_argument("--archive", help="Downloaded MusicBee Portable ZIP or EXE")
-    ini.add_argument("--accept-license", action="store_true", help="Explicitly accept MusicBee EULA for unattended install")
-    ini.add_argument("--no-launch", action="store_true", help="Do not start MusicBee after installing")
-    setp = sub.add_parser("setup", help="Initialize Wine and configure the Linux -> Windows music path")
-    setp.add_argument("--music-dir", metavar="LINUX_DIR", help="Existing directory containing your music (default: ~/Music)")
-    setp.add_argument("--wine-music-path", "--windows-music-path", dest="windows_music_path", metavar="WIN_PATH", help=r"Absolute location inside Wine, e.g. C:\Users\oldname\Music or M:")
-    setp.add_argument("--refresh-dependencies", action="store_true", help="Re-run winetricks for an existing prefix")
     ins = sub.add_parser("install", help="Install or update MusicBee from a downloaded portable archive")
     ins.add_argument("installer", help="Path to the MusicBee Portable ZIP or EXE")
     backup_options = ins.add_mutually_exclusive_group()
@@ -1452,8 +1462,14 @@ def create_parser() -> argparse.ArgumentParser:
                                 help="Keep a backup during updates without prompting")
     backup_options.add_argument("--no-backup", dest="keep_backup", action="store_false",
                                 help="Do not keep an update backup; skip the prompt")
-    runp = sub.add_parser("run", help="Run MusicBee; show installation instructions if missing")
-    runp.add_argument("musicbee_args", nargs=argparse.REMAINDER)
+    ini = sub.add_parser("init", help="Set up Wine and install MusicBee from a downloaded archive")
+    ini.add_argument("--archive", help="Downloaded MusicBee Portable ZIP or EXE")
+    ini.add_argument("--accept-license", action="store_true", help="Explicitly accept MusicBee EULA for unattended install")
+    ini.add_argument("--no-launch", action="store_true", help="Do not start MusicBee after installing")
+    sub.add_parser("repair-dependencies", help="Re-run Wine dependency setup for an existing installation")
+    music = sub.add_parser("music-dir", help="Show or configure a Wine link to your music directory")
+    music.add_argument("directory", nargs="?", help="Linux music directory")
+    music.add_argument("--wine-music-path", metavar="WIN_PATH", help=r"Windows path (default: previous path or C:\Users\<user>\Music)")
     conf = sub.add_parser("config", help="View or change Wine and playback tweaks")
     conf.add_argument("option", nargs="?", help="Setting to inspect or change")
     conf.add_argument("value", nargs="?", help="New value, or info for details")
@@ -1476,34 +1492,46 @@ def create_parser() -> argparse.ArgumentParser:
     mpris.add_argument("action", choices=("install", "repair", "status"))
     mpris.add_argument("--archive", metavar="ZIP", help="Use a locally downloaded MPRISBee release ZIP instead of downloading")
     mpris.add_argument("--sha256", metavar="HEX", help="Optional expected ZIP SHA-256 for integrity checking")
-    sub.add_parser("status", help="Show configured music mapping and installation state")
+    sub.add_parser("status", help="Show Wine prefix and installation state")
     return parser
 
 
 def main() -> int:
     parser = create_parser()
-    args = parser.parse_args()
-    if args.command is None:
-        args = parser.parse_args(["run"])
+    arguments = sys.argv[1:]
+    executable = Path(sys.argv[0]).name
+    manager = executable in ("musicbee-manage", "musicbee.py")
+    if executable == "musicbee.py" and arguments and arguments[0] == "--manage":
+        manager = True
+        arguments = arguments[1:]
+    elif executable == "musicbee.py" and arguments and arguments[0] == "--launch":
+        manager = False
+        arguments = arguments[1:]
+    args = parser.parse_args(arguments) if manager else None
+    if manager and args.command is None:
+        parser.print_help()
+        return 0
     if os.geteuid() == 0:
         print("Error: run as your desktop user, not root.", file=sys.stderr)
         return 1
     paths = locations()
     try:
-        if args.command == "setup":
-            setup(args, paths)
+        if not manager:
+            if not paths["app"].joinpath("MusicBee.exe").is_file():
+                first_launch(argparse.Namespace(archive=None, accept_license=False, no_launch=True), paths)
+            run(argparse.Namespace(musicbee_args=arguments), paths)
+        elif args.command == "repair-dependencies":
+            repair_dependencies(paths)
+        elif args.command == "music-dir":
+            configure_music_dir(args, paths)
         elif args.command == "install":
             install(args, paths)
-        elif args.command == "run":
-            if not paths["app"].joinpath("MusicBee.exe").is_file():
-                first_launch(argparse.Namespace(music_dir=None, wine_music_path=None, archive=None, accept_license=False, no_launch=True), paths)
-            run(args, paths)
         elif args.command == "init":
             first_launch(args, paths)
         elif args.command == "desktop-setup":
-            first_launch(argparse.Namespace(music_dir=None, wine_music_path=None, archive=None,
+            first_launch(argparse.Namespace(archive=None,
                                             accept_license=False, no_launch=True), paths)
-            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "run"],
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--launch"],
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True)
         elif args.command == "backup":
@@ -1527,7 +1555,7 @@ def main() -> int:
         return 0
     except (SetupError, OSError, subprocess.CalledProcessError, zipfile.BadZipFile, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
-        if args.command == "desktop-setup" and sys.stdin.isatty():
+        if manager and args.command == "desktop-setup" and sys.stdin.isatty():
             input("Press Enter to close this window.")
         return 1
 

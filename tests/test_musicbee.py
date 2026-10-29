@@ -19,6 +19,72 @@ loader.exec_module(mb)
 
 
 class PortableExtractionTests(unittest.TestCase):
+    def test_music_dir_helper_creates_and_updates_only_its_mapping(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prefix = root / 'prefix'
+            (prefix / 'drive_c').mkdir(parents=True)
+            (prefix / '.musicbee-bootstrap-complete').touch()
+            first, second = root / 'first', root / 'second'
+            first.mkdir()
+            second.mkdir()
+            paths = {'prefix': prefix, 'state': root / 'state'}
+            args = argparse.Namespace(directory=str(first), wine_music_path=r'C:\MyMusic')
+            mb.configure_music_dir(args, paths)
+            link = prefix / 'drive_c' / 'MyMusic'
+            self.assertEqual(link.resolve(), first)
+            self.assertEqual(mb.read_config(paths['state'])['windows_music_path'], r'C:\MyMusic')
+            mb.configure_music_dir(argparse.Namespace(directory=str(second), wine_music_path=None), paths)
+            self.assertEqual(link.resolve(), second)
+            unrelated = prefix / 'drive_c' / 'OtherMusic'
+            unrelated.symlink_to(first, target_is_directory=True)
+            with self.assertRaisesRegex(mb.SetupError, 'unrelated symlink'):
+                mb.configure_music_dir(argparse.Namespace(directory=str(second), wine_music_path=r'C:\OtherMusic'), paths)
+            self.assertEqual(unrelated.resolve(), first)
+            self.assertEqual(link.resolve(), second)
+
+    def test_music_dir_helper_replaces_wines_default_music_link(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prefix = root / 'prefix'
+            (prefix / '.musicbee-bootstrap-complete').parent.mkdir()
+            (prefix / '.musicbee-bootstrap-complete').touch()
+            default_music = root / 'Music'
+            custom_music = root / 'custom'
+            default_music.mkdir()
+            custom_music.mkdir()
+            link = prefix / 'drive_c' / 'users' / mb.getpass.getuser() / 'Music'
+            link.parent.mkdir(parents=True)
+            link.symlink_to(default_music, target_is_directory=True)
+            with patch.object(mb.Path, 'home', return_value=root):
+                mb.configure_music_dir(argparse.Namespace(directory=str(custom_music), wine_music_path=None),
+                                       {'prefix': prefix, 'state': root / 'state'})
+            self.assertEqual(link.resolve(), custom_music)
+            self.assertTrue(default_music.is_dir())
+
+    def test_launch_arguments_and_management_entrypoint(self):
+        with TemporaryDirectory() as tmp:
+            app = Path(tmp) / 'app'
+            app.mkdir()
+            (app / 'MusicBee.exe').touch()
+            paths = {'app': app}
+            with patch.object(mb.os, 'geteuid', return_value=1000), \
+                 patch.object(mb, 'locations', return_value=paths), \
+                 patch.object(mb, 'run') as run, patch.object(mb, 'configure') as configure:
+                for argv in (['musicbee', '/Play', r'C:\Music\song.mp3'],
+                             ['musicbee.py', '--launch', '/Play', r'C:\Music\song.mp3']):
+                    with patch.object(mb.sys, 'argv', argv):
+                        self.assertEqual(mb.main(), 0)
+                        self.assertEqual(run.call_args.args[0].musicbee_args, ['/Play', r'C:\Music\song.mp3'])
+                for argv in (['musicbee', 'config'], ['musicbee', '--manage']):
+                    with patch.object(mb.sys, 'argv', argv):
+                        self.assertEqual(mb.main(), 0)
+                        self.assertEqual(run.call_args.args[0].musicbee_args, argv[1:])
+                for argv in (['musicbee-manage', 'config'], ['musicbee.py', '--manage', 'config']):
+                    with patch.object(mb.sys, 'argv', argv):
+                        self.assertEqual(mb.main(), 0)
+                self.assertEqual(configure.call_count, 2)
+
     def test_tabs_move_preserves_settings_and_selected_tab(self):
         with TemporaryDirectory() as tmp:
             prefix = Path(tmp) / 'prefix'
@@ -133,7 +199,7 @@ class PortableExtractionTests(unittest.TestCase):
 
     def test_missing_archive_instructs_user_to_download(self):
         with patch.dict(mb.os.environ, {}, clear=True):
-            with self.assertRaisesRegex(mb.SetupError, 'musicbee install'):
+            with self.assertRaisesRegex(mb.SetupError, 'musicbee-manage install'):
                 mb.packaged_archive({})
 
     def test_nonportable_zip_rejected_before_first_setup(self):
@@ -145,7 +211,7 @@ class PortableExtractionTests(unittest.TestCase):
             paths = {'state': root / 'state', 'prefix': root / 'prefix', 'app': root / 'app'}
             args = argparse.Namespace(music_dir=None, wine_music_path=None, archive=str(archive),
                                       accept_license=False, no_launch=True)
-            with patch.object(mb, 'setup') as setup_mock, patch.object(mb, 'confirm_license') as consent_mock:
+            with patch.object(mb, 'initialize_prefix') as setup_mock, patch.object(mb, 'confirm_license') as consent_mock:
                 with self.assertRaisesRegex(mb.SetupError, 'non-portable.*Portable Edition'):
                     mb.first_launch(args, paths)
                 setup_mock.assert_not_called()
@@ -273,25 +339,9 @@ class PortableExtractionTests(unittest.TestCase):
 
     def test_cli_init_arguments(self):
         parser = mb.create_parser()
-        args = parser.parse_args(['init','--music-dir','/tmp/music','--accept-license','--no-launch'])
-        self.assertIsNone(args.wine_music_path)
+        args = parser.parse_args(['init','--accept-license','--no-launch'])
         self.assertTrue(args.accept_license)
         self.assertTrue(args.no_launch)
-
-    def test_existing_wine_music_link_is_kept(self):
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            prefix = root / 'prefix'
-            music = root / 'Music'
-            music.mkdir()
-            target = prefix / 'drive_c' / 'users' / 'testuser' / 'Music'
-            target.parent.mkdir(parents=True)
-            target.symlink_to(music, target_is_directory=True)
-            original_inode = target.lstat().st_ino
-            result = mb.update_mapping(prefix, music, r'C:\Users\testuser\Music', {})
-            self.assertEqual(result, target)
-            self.assertEqual(target.lstat().st_ino, original_inode)
-            self.assertEqual(target.resolve(), music)
 
     def test_internal_desktop_command_is_not_in_public_help(self):
         parser = mb.create_parser()
@@ -348,6 +398,21 @@ class PortableExtractionTests(unittest.TestCase):
                     mb.configure(argparse.Namespace(option='windows-version', value='8.1'), paths)
             self.assertEqual(mb.tweak_value(mb.read_config(paths['state']), 'windows-version'), '10')
 
+    def test_repair_dependencies_reuses_configured_windows_version(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prefix = root / 'prefix'
+            prefix.mkdir()
+            (prefix / '.musicbee-bootstrap-complete').touch()
+            paths = {'state': root / 'state', 'prefix': prefix}
+            mb.write_config(paths['state'], {'tweaks': {'windows-version': '10'}})
+            with patch.object(mb, 'ensure_bootstrap') as bootstrap, \
+                 patch.object(mb, 'apply_windows_version') as version, \
+                 patch.object(mb, 'record_environment'):
+                mb.repair_dependencies(paths)
+            bootstrap.assert_called_once_with(prefix, refresh=True)
+            version.assert_called_once_with('10', prefix)
+
     def test_run_applies_gdiplus_and_audio_settings(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -356,9 +421,10 @@ class PortableExtractionTests(unittest.TestCase):
             (app / 'MusicBee.exe').touch()
             launcher = root / 'musicbee'
             launcher.touch()
+            launcher.with_name('musicbee-manage').touch()
             paths = {'state': root / 'state', 'prefix': root / 'prefix', 'app': app, 'bin': launcher}
             args = argparse.Namespace(musicbee_args=[])
-            with patch.object(mb, 'require_ready'), patch.object(mb, 'validate_mapping'), \
+            with patch.object(mb, 'require_ready'), \
                  patch.object(mb, 'require_commands'), patch.object(mb, 'call') as command, \
                  patch.object(mb, 'apply_windows_version') as windows_version, \
                  patch.dict(mb.os.environ, {'PULSE_LATENCY_MSEC': '25'}):
@@ -366,7 +432,8 @@ class PortableExtractionTests(unittest.TestCase):
                 windows_version.assert_called_once_with('8.1', paths['prefix'])
                 self.assertEqual(command.call_args.kwargs['env']['WINEDLLOVERRIDES'], '*gdiplus=n,b;gdiplus=n,b')
                 self.assertEqual(command.call_args.kwargs['env']['PULSE_LATENCY_MSEC'], '25')
-                mb.write_config(paths['state'], {'tweaks': {'gdiplus': 'wine', 'audio-latency': 'on', 'windows-version': '10'}})
+                mb.write_config(paths['state'], {'music_dir': '/missing', 'windows_music_path': 'M:',
+                                                  'tweaks': {'gdiplus': 'wine', 'audio-latency': 'on', 'windows-version': '10'}})
                 mb.run(args, paths)
                 windows_version.assert_called_once()
                 self.assertEqual(command.call_args.kwargs['env']['WINEDLLOVERRIDES'], '*gdiplus=b;gdiplus=b')
@@ -380,6 +447,7 @@ class PortableExtractionTests(unittest.TestCase):
             (prefix / '.musicbee-bootstrap-complete').touch()
             launcher = root / 'musicbee'
             launcher.touch()
+            launcher.with_name('musicbee-manage').touch()
             paths = {'state': root / 'state', 'prefix': prefix, 'bin': launcher}
             args = argparse.Namespace(action='add', name='picard', tool_command='flatpak run org.musicbrainz.Picard')
             mb.manage_tools(args, paths)
@@ -387,6 +455,9 @@ class PortableExtractionTests(unittest.TestCase):
                              ['flatpak', 'run', 'org.musicbrainz.Picard'])
             bridge = prefix / 'drive_c' / 'musicbee-linux-tools' / mb.tool_bridge_name('picard')
             self.assertIn('tools-dispatch picard "$@"', bridge.read_text())
+            bridge.write_text('#!/bin/sh\n' + mb.TOOL_BRIDGE_MARKER + 'exec old-launcher tools-dispatch picard "$@"\n')
+            mb.refresh_tool_bridges(paths, mb.read_config(paths['state']))
+            self.assertIn('musicbee-manage tools-dispatch picard', bridge.read_text())
             files = [root / 'a file.flac', root / '音楽.flac']
             for file in files:
                 file.touch()
@@ -422,6 +493,7 @@ class PortableExtractionTests(unittest.TestCase):
             app.mkdir()
             launcher = root / 'launcher'
             launcher.touch()
+            launcher.with_name('musicbee-manage').touch()
             paths = {'app': app, 'bin': launcher, 'state': root}
             target = app / 'explorer.exe'
             target.write_bytes(b'existing explorer')
@@ -497,14 +569,11 @@ class PortableExtractionTests(unittest.TestCase):
                 media_mock.assert_called_once_with(paths)
                 windows_version.assert_called_once_with('8.1', prefix)
             self.assertTrue((paths['app'] / 'MusicBee.exe').is_file())
-            self.assertEqual(json.loads((state/'config.json').read_text())['windows_music_path'],
-                             f'C:\\Users\\{mb.getpass.getuser()}\\Music')
             self.assertEqual(json.loads((state/'config.json').read_text())['tweaks']['gdiplus'], 'wine')
-            self.assertEqual((prefix/'drive_c'/'Users'/mb.getpass.getuser()/'Music').resolve(),
-                             (home/'Music').resolve())
+            self.assertFalse((prefix/'drive_c'/'Users').exists())
             self.assertFalse((prefix/'dosdevices'/'m:').exists())
             self.assertTrue(paths['desktop'].is_file())
-            self.assertIn(' run\nTerminal=false\n', paths['desktop'].read_text())
+            self.assertIn('musicbee"\nTerminal=false\n', paths['desktop'].read_text())
             self.assertEqual(len(json.loads((state/'portable-source.json').read_text())['sha256']), 64)
 
     def test_desktop_launcher_shows_setup_in_terminal_until_installed(self):
@@ -514,18 +583,18 @@ class PortableExtractionTests(unittest.TestCase):
             mb.make_launcher(root / 'musicbee', desktop, setup_needed=True)
             self.assertIn(' desktop-setup\nTerminal=true\n', desktop.read_text())
             mb.make_launcher(root / 'musicbee', desktop)
-            self.assertIn(' run\nTerminal=false\n', desktop.read_text())
+            self.assertIn('musicbee"\nTerminal=false\n', desktop.read_text())
 
     def test_desktop_setup_starts_musicbee_after_setup(self):
         paths = {'app': Path('/unused')}
-        with patch.object(mb.sys, 'argv', ['musicbee', 'desktop-setup']), \
+        with patch.object(mb.sys, 'argv', ['musicbee-manage', 'desktop-setup']), \
              patch.object(mb.os, 'geteuid', return_value=1000), \
              patch.object(mb, 'locations', return_value=paths), \
              patch.object(mb, 'first_launch') as setup_mock, \
              patch.object(mb.subprocess, 'Popen') as launch_mock:
             self.assertEqual(mb.main(), 0)
             self.assertTrue(setup_mock.call_args.args[0].no_launch)
-            self.assertEqual(launch_mock.call_args.args[0][-1], 'run')
+            self.assertEqual(launch_mock.call_args.args[0][-1], '--launch')
             self.assertTrue(launch_mock.call_args.kwargs['start_new_session'])
 
     def test_run_uses_no_install_if_present(self):
@@ -537,7 +606,7 @@ class PortableExtractionTests(unittest.TestCase):
             (app / 'MusicBee.exe').write_bytes(b'a')
             paths = {'state':state, 'prefix':state/'wineprefix', 'app':app}
             args = argparse.Namespace(music_dir=None, wine_music_path='M:', archive=None, accept_license=True, no_launch=True)
-            with patch.object(mb, 'setup') as setup_mock, \
+            with patch.object(mb, 'initialize_prefix') as setup_mock, \
                  patch.object(mb, 'ensure_media_controls') as media_mock:
                 mb.first_launch(args, paths)
                 setup_mock.assert_not_called()

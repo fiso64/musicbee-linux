@@ -16,7 +16,7 @@ sudo dnf config-manager addrepo \
 
 sudo dnf install musicbee
 
-musicbee install ~/Downloads/MusicBeePortable_*.zip
+musicbee-manage install ~/Downloads/MusicBeePortable_*.zip
 ```
 
 ### Manual install
@@ -33,11 +33,10 @@ Manual installation has not yet been tested on every distribution.
 
 ## Your music
 
-Wine normally makes `~/Music` available in MusicBee's default Music folder (`C:\Users\yourusername\Music`).
-To use another folder:
+Wine normally makes `~/Music` available in MusicBee's default Music folder (`C:\Users\yourusername\Music`). To use another folder, close MusicBee and run:
 
 ```bash
-musicbee setup --music-dir /path/to/music --wine-music-path 'C:\Users\username\Music'
+musicbee-manage music-dir /path/to/music --wine-music-path 'C:\MyMusic'
 ```
 
 ## Updating MusicBee, installing plugins
@@ -45,7 +44,7 @@ musicbee setup --music-dir /path/to/music --wine-music-path 'C:\Users\username\M
 To update MusicBee itself, close it, download a newer Portable archive and run:
 
 ```bash
-musicbee install ~/Downloads/MusicBeePortable_*.zip
+musicbee-manage install ~/Downloads/MusicBeePortable_*.zip
 ```
 
 or just extract the contents to the MusicBee install location.
@@ -57,7 +56,7 @@ Installing plugins works as usual: Just follow their normal install process.
 To send tracks to a native Linux application, register its command:
 
 ```bash
-musicbee tools add picard 'flatpak run org.musicbrainz.Picard'
+musicbee-manage tools add picard 'flatpak run org.musicbrainz.Picard'
 ```
 
 Then add the printed path in the MusicBee Tools configuration as usual.
@@ -71,12 +70,12 @@ This package already includes most of the known tweaks to get MusicBee running s
 - Native file-manager integration
 - A workaround for the crashing file converters tab
 
-Additional optional tweaks can be listed with `musicbee config`. If you're having issues, look here first. Example usage:
+Additional optional tweaks can be listed with `musicbee-manage config`. If you're having issues, look here first. Example usage:
 
 ```bash
-musicbee config                    # list all settings
-musicbee config gdiplus            # describe a setting
-musicbee config audio-latency on   # example: sometimes useful against stuttering
+musicbee-manage config                    # list all settings
+musicbee-manage config gdiplus            # describe a setting
+musicbee-manage config audio-latency on   # example: sometimes useful against stuttering
 ```
 
 <details>
@@ -86,8 +85,8 @@ musicbee config audio-latency on   # example: sometimes useful against stutterin
 Close MusicBee, then list and rearrange the saved tabs:
 
 ```bash
-musicbee tabs       # list tabs in their current order
-musicbee tabs 3 1   # move tab 3 to the first position
+musicbee-manage tabs       # list tabs in their current order
+musicbee-manage tabs 3 1   # move tab 3 to the first position
 ```
 
 ### Some skins have broken/ugly window borders or missing min/max/close buttons
@@ -107,7 +106,7 @@ sudo dnf remove musicbee
 For a manual installation:
 
 ```bash
-rm -f ~/.local/bin/musicbee ~/.local/share/applications/musicbee.desktop
+rm -f ~/.local/bin/musicbee ~/.local/bin/musicbee-manage ~/.local/share/applications/musicbee.desktop
 ```
 
 This leaves your music, settings and Wine prefix in place. Integration data is

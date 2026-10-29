@@ -3,9 +3,10 @@
 The shared application and launcher are independent of package format:
 
 - `/usr/bin/musicbee` runs `/usr/libexec/musicbee/musicbee.py`.
+- `/usr/bin/musicbee-manage` runs the same script for setup and configuration.
 - `/usr/share/applications/musicbee.desktop` provides the desktop entry.
 - Users download the proprietary MusicBee Portable archive themselves and run
-  `musicbee install /path/to/MusicBeePortable.zip` to install or update it.
+  `musicbee-manage install /path/to/MusicBeePortable.zip` to install or update it.
 
 `nfpm/nfpm.yaml` defines the package contents and Fedora RPM dependencies.
 Build with `./scripts/build-package.sh rpm`. Add DEB-specific dependencies and

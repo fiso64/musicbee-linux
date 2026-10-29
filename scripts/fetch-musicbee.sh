@@ -38,4 +38,4 @@ with zipfile.ZipFile(path) as z:
 PY
 cp "${archives[0]}" "$root/vendor/musicbee-portable.zip"
 sha256sum "$root/vendor/musicbee-portable.zip"
-echo "Download complete. Run: musicbee install '$root/vendor/musicbee-portable.zip'"
+echo "Download complete. Run: musicbee-manage install '$root/vendor/musicbee-portable.zip'"

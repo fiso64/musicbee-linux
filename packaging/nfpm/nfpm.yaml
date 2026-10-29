@@ -19,6 +19,10 @@ contents:
     dst: /usr/bin/musicbee
     file_info:
       mode: 0755
+  - src: packaging/musicbee-manage
+    dst: /usr/bin/musicbee-manage
+    file_info:
+      mode: 0755
   - src: desktop/musicbee.desktop
     dst: /usr/share/applications/musicbee.desktop
     file_info:
