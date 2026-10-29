@@ -19,6 +19,47 @@ loader.exec_module(mb)
 
 
 class PortableExtractionTests(unittest.TestCase):
+    def test_musicbee_path_arguments(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            song = root / 'a song.flac'
+            song.touch()
+            paths = [str(song), '/Play', 'relative list.m3u', '/QueueLast',
+                     'https://example.com/music', '/QueueNext', r'C:\Music\track.flac', '/Next']
+            conversions = [subprocess.CompletedProcess([], 0, 'Z:\\song.flac\n', ''),
+                           subprocess.CompletedProcess([], 0, 'Z:\\list.m3u\n', '')]
+            with patch.object(mb, 'require_commands'), \
+                 patch.object(mb.subprocess, 'run', side_effect=conversions) as winepath:
+                result = mb.musicbee_arguments(paths, root)
+            self.assertEqual(result, ['Z:\\song.flac', '/Play', 'Z:\\list.m3u', '/QueueLast',
+                                      'https://example.com/music', '/QueueNext', r'C:\Music\track.flac', '/Next'])
+            self.assertEqual(winepath.call_count, 2)
+            self.assertTrue(Path(winepath.call_args.args[0][-1]).is_absolute())
+
+    def test_running_instance_accepts_commands_but_maintenance_does_not(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prefix = root / 'prefix'
+            app = prefix / 'drive_c' / 'MusicBee'
+            app.mkdir(parents=True)
+            (app / 'MusicBee.exe').touch()
+            (prefix / '.musicbee-bootstrap-complete').touch()
+            paths = {'prefix': prefix, 'app': app, 'state': root / 'state', 'bin': root / 'musicbee'}
+            with (prefix / '.musicbee.launch.lock').open('a+') as main_lock:
+                mb.fcntl.flock(main_lock, mb.fcntl.LOCK_EX | mb.fcntl.LOCK_NB)
+                with patch.object(mb, 'require_commands'), patch.object(mb, 'call') as call, \
+                     patch.object(mb, 'configure_explorer_redirect') as prepare:
+                    args = argparse.Namespace(musicbee_args=['/Next'])
+                    with self.assertRaisesRegex(mb.SetupError, 'being modified'):
+                        mb.run(args, paths)
+                    with (prefix / '.musicbee.active.lock').open('a+') as active:
+                        mb.fcntl.flock(active, mb.fcntl.LOCK_EX | mb.fcntl.LOCK_NB)
+                        mb.run(args, paths)
+                    self.assertEqual(call.call_args.args[0], ['wine', 'MusicBee.exe', '/Next'])
+                    prepare.assert_not_called()
+                    with self.assertRaisesRegex(mb.SetupError, 'already appears to be running'):
+                        mb.run(argparse.Namespace(musicbee_args=[]), paths)
+
     def test_music_dir_helper_creates_and_updates_only_its_mapping(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -84,6 +125,17 @@ class PortableExtractionTests(unittest.TestCase):
                     with patch.object(mb.sys, 'argv', argv):
                         self.assertEqual(mb.main(), 0)
                 self.assertEqual(configure.call_count, 2)
+
+    def test_launcher_help_does_not_start_musicbee(self):
+        for argv in (['musicbee', '-h'], ['musicbee', '--help'],
+                     ['musicbee.py', '--launch', '--help']):
+            with self.subTest(argv=argv), patch.object(mb.sys, 'argv', argv), \
+                 patch('sys.stdout', new_callable=io.StringIO) as output, \
+                 patch.object(mb, 'run') as run:
+                self.assertEqual(mb.main(), 0)
+                self.assertIn('musicbee-manage --help', output.getvalue())
+                self.assertIn('/QueueNext', output.getvalue())
+                run.assert_not_called()
 
     def test_tabs_move_preserves_settings_and_selected_tab(self):
         with TemporaryDirectory() as tmp:
@@ -573,7 +625,7 @@ class PortableExtractionTests(unittest.TestCase):
             self.assertFalse((prefix/'drive_c'/'Users').exists())
             self.assertFalse((prefix/'dosdevices'/'m:').exists())
             self.assertTrue(paths['desktop'].is_file())
-            self.assertIn('musicbee"\nTerminal=false\n', paths['desktop'].read_text())
+            self.assertIn('musicbee" %f\nTerminal=false\n', paths['desktop'].read_text())
             self.assertEqual(len(json.loads((state/'portable-source.json').read_text())['sha256']), 64)
 
     def test_desktop_launcher_shows_setup_in_terminal_until_installed(self):
@@ -581,20 +633,22 @@ class PortableExtractionTests(unittest.TestCase):
             root = Path(tmp)
             desktop = root / 'musicbee.desktop'
             mb.make_launcher(root / 'musicbee', desktop, setup_needed=True)
-            self.assertIn(' desktop-setup\nTerminal=true\n', desktop.read_text())
+            self.assertIn(' desktop-setup %f\nTerminal=true\n', desktop.read_text())
             mb.make_launcher(root / 'musicbee', desktop)
-            self.assertIn('musicbee"\nTerminal=false\n', desktop.read_text())
+            self.assertIn('musicbee" %f\nTerminal=false\n', desktop.read_text())
+            self.assertIn('audio/x-flac;', desktop.read_text())
+            self.assertIn('audio/x-mpegurl;', desktop.read_text())
 
     def test_desktop_setup_starts_musicbee_after_setup(self):
         paths = {'app': Path('/unused')}
-        with patch.object(mb.sys, 'argv', ['musicbee-manage', 'desktop-setup']), \
+        with patch.object(mb.sys, 'argv', ['musicbee-manage', 'desktop-setup', '/music/song.flac']), \
              patch.object(mb.os, 'geteuid', return_value=1000), \
              patch.object(mb, 'locations', return_value=paths), \
              patch.object(mb, 'first_launch') as setup_mock, \
              patch.object(mb.subprocess, 'Popen') as launch_mock:
             self.assertEqual(mb.main(), 0)
             self.assertTrue(setup_mock.call_args.args[0].no_launch)
-            self.assertEqual(launch_mock.call_args.args[0][-1], '--launch')
+            self.assertEqual(launch_mock.call_args.args[0][-2:], ['--launch', '/music/song.flac'])
             self.assertTrue(launch_mock.call_args.kwargs['start_new_session'])
 
     def test_run_uses_no_install_if_present(self):

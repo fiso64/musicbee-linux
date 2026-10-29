@@ -31,7 +31,9 @@ python3 src/musicbee.py install ~/Downloads/MusicBeePortable_*.zip
 
 Manual installation has not yet been tested on every distribution.
 
-## Your music
+## Usage
+
+### Your music
 
 Wine normally makes `~/Music` available in MusicBee's default Music folder (`C:\Users\yourusername\Music`). To use another folder, close MusicBee and run:
 
@@ -39,19 +41,7 @@ Wine normally makes `~/Music` available in MusicBee's default Music folder (`C:\
 musicbee-manage music-dir /path/to/music --wine-music-path 'C:\MyMusic'
 ```
 
-## Updating MusicBee, installing plugins
-
-To update MusicBee itself, close it, download a newer Portable archive and run:
-
-```bash
-musicbee-manage install ~/Downloads/MusicBeePortable_*.zip
-```
-
-or just extract the contents to the MusicBee install location.
-
-Installing plugins works as usual: Just follow their normal install process.
-
-## Using external tools
+### Using external tools
 
 To send tracks to a native Linux application, register its command:
 
@@ -60,6 +50,20 @@ musicbee-manage tools add picard 'flatpak run org.musicbrainz.Picard'
 ```
 
 Then add the printed path in the MusicBee Tools configuration as usual.
+
+### MusicBee command line
+
+`musicbee` accepts MusicBee's usual command-line options, including when it is
+already running. Linux file and folder paths are translated to Wine paths (Windows paths also work).
+
+```bash
+musicbee ~/Music/song.flac
+musicbee /QueueNext ~/Music/playlist.m3u
+musicbee /Next
+musicbee --help   # View all options
+```
+
+See MusicBee's [documented options](https://getmusicbee.com/forum/index.php?topic=6885.0).
 
 ## Tweaks & troubleshooting
 
@@ -94,6 +98,18 @@ musicbee-manage tabs 3 1   # move tab 3 to the first position
 Try enabling or disabling `View > Skins > Skin Window Borders`. 
 
 </details>
+
+## Updating MusicBee, installing plugins
+
+To update MusicBee itself, close it, download a newer Portable archive and run:
+
+```bash
+musicbee-manage install ~/Downloads/MusicBeePortable_*.zip
+```
+
+or just extract the contents to the MusicBee install location.
+
+Installing plugins works as usual: Just follow their normal install process.
 
 ## Uninstalling
 

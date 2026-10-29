@@ -742,6 +742,14 @@ def extract_musicbee_icon(app: Path, state: Path) -> Path | None:
     return icon
 
 
+MUSIC_MIME_TYPES = (
+    "audio/mpeg;audio/x-mp3;audio/x-flac;audio/flac;audio/x-wav;audio/wav;"
+    "audio/aac;audio/mp4;audio/x-m4a;audio/ogg;audio/x-vorbis+ogg;audio/x-opus+ogg;"
+    "audio/x-ape;audio/x-wavpack;audio/mpegurl;audio/x-mpegurl;"
+    "application/vnd.apple.mpegurl;audio/x-scpls;"
+)
+
+
 def make_launcher(binary: Path, desktop: Path, icon: Path | None = None, *, setup_needed: bool = False) -> None:
     desktop.parent.mkdir(parents=True, exist_ok=True)
     command = f"{desktop_quote(str(binary.with_name('musicbee-manage')))} desktop-setup" if setup_needed else desktop_quote(str(binary))
@@ -750,14 +758,26 @@ def make_launcher(binary: Path, desktop: Path, icon: Path | None = None, *, setu
         "Type=Application\n"
         "Name=MusicBee\n"
         "Comment=MusicBee via Wine\n"
-        f"Exec={command}\n"
+        f"Exec={command} %f\n"
         f"Terminal={'true' if setup_needed else 'false'}\n"
         f"Icon={icon if icon and icon.is_file() else 'multimedia-audio-player'}\n"
         "Categories=AudioVideo;Audio;Player;\n"
+        f"MimeType={MUSIC_MIME_TYPES}\n"
         "StartupNotify=true\n"
         "StartupWMClass=musicbee.exe\n",
         encoding="utf-8",
     )
+    updater = shutil.which("update-desktop-database")
+    if updater:
+        try:
+            result = subprocess.run([updater, str(desktop.parent)], check=False,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if result.returncode:
+                print(f"Warning: could not refresh desktop file associations in {desktop.parent}.", file=sys.stderr)
+        except OSError as exc:
+            print(f"Warning: could not refresh desktop file associations: {exc}", file=sys.stderr)
+    else:
+        print("Note: install desktop-file-utils to refresh desktop file associations.")
 
 
 def record_environment(state: Path, prefix: Path) -> None:
@@ -909,6 +929,31 @@ def regenerate_launcher(paths: dict[str, Path]) -> None:
         print("Desktop icon: generic placeholder (actual icon needs MusicBee.exe and icoutils)")
 
 
+def musicbee_arguments(arguments: list[str], prefix: Path) -> list[str]:
+    """Translate Linux file arguments without changing switches, URLs or Windows paths."""
+    result = []
+    path_expected = False
+    for arg in arguments:
+        switch = arg.casefold() in ("/play", "/queuenext", "/queuelast")
+        windows_path = bool(re.match(r"^(?:[A-Za-z]:|\\\\)", arg))
+        url = bool(re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", arg))
+        candidate = Path(arg).expanduser()
+        is_path = (path_expected or candidate.exists() or (not arg.startswith(("/", "-")) and bool(candidate.suffix))
+                   or arg.startswith(("./", "../", "~/"))
+                   or (arg.startswith("/") and "/" in arg[1:]))
+        if not switch and not windows_path and not url and is_path:
+            require_commands("winepath")
+            converted = subprocess.run(["winepath", "-w", str(candidate.absolute())],
+                                       env=wine_env(prefix), text=True, capture_output=True, check=False)
+            if converted.returncode or not converted.stdout.strip():
+                die(f"Cannot convert path for Wine: {arg}. {converted.stderr.strip()}")
+            result.append(converted.stdout.rstrip("\r\n"))
+        else:
+            result.append(arg)
+        path_expected = switch
+    return result
+
+
 def run(args: argparse.Namespace, paths: dict[str, Path]) -> None:
     prefix, app = paths["prefix"], paths["app"]
     require_ready(prefix)
@@ -916,26 +961,36 @@ def run(args: argparse.Namespace, paths: dict[str, Path]) -> None:
     require_commands("wine")
     if not (app / "MusicBee.exe").is_file():
         die(r"MusicBee.exe not found at C:\MusicBee; use the install command first.")
-    bass = app / "basswma.dll"
-    disabled = app / "basswma.dll.musicbee-disabled"
-    if os.environ.get("MUSICBEE_ENABLE_WMA") == "1":
-        if not bass.exists() and disabled.exists():
-            disabled.rename(bass)
-    elif bass.exists():
-        if disabled.exists():
-            die(f"Both {bass.name} and {disabled.name} exist; resolve manually.")
-        bass.rename(disabled)
     env = wine_env(prefix)
     gdiplus = "n,b" if tweak_value(config, "gdiplus") == "native" else "b"
     env["WINEDLLOVERRIDES"] = f"*gdiplus={gdiplus};gdiplus={gdiplus}"
     if tweak_value(config, "audio-latency") == "on":
         env["PULSE_LATENCY_MSEC"] = "60"
     lock_path = prefix / ".musicbee.launch.lock"
-    with lock_path.open("w") as lock:
+    with lock_path.open("a+") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            die("MusicBee already appears to be running from this prefix.")
+            if not args.musicbee_args:
+                die("MusicBee already appears to be running from this prefix.")
+            # The launch lock is also used by maintenance operations. Only send
+            # commands when a running launcher holds the separate active lock.
+            with (prefix / ".musicbee.active.lock").open("a+") as active:
+                try:
+                    fcntl.flock(active, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    call(["wine", "MusicBee.exe", *musicbee_arguments(args.musicbee_args, prefix)], env=env, cwd=app)
+                    return
+            die("MusicBee is starting or its installation is being modified; try again shortly.")
+        bass = app / "basswma.dll"
+        disabled = app / "basswma.dll.musicbee-disabled"
+        if os.environ.get("MUSICBEE_ENABLE_WMA") == "1":
+            if not bass.exists() and disabled.exists():
+                disabled.rename(bass)
+        elif bass.exists():
+            if disabled.exists():
+                die(f"Both {bass.name} and {disabled.name} exist; resolve manually.")
+            bass.rename(disabled)
         if "windows-version" not in config.get("tweaks", {}):
             version = tweak_value(config, "windows-version")
             apply_windows_version(version, prefix)
@@ -943,7 +998,9 @@ def run(args: argparse.Namespace, paths: dict[str, Path]) -> None:
             write_config(paths["state"], config)
         refresh_tool_bridges(paths, config)
         configure_explorer_redirect(paths, tweak_value(config, "native-file-manager") == "on")
-        call(["wine", "MusicBee.exe", *args.musicbee_args], env=env, cwd=app)
+        with (prefix / ".musicbee.active.lock").open("a+") as active:
+            fcntl.flock(active, fcntl.LOCK_EX)
+            call(["wine", "MusicBee.exe", *musicbee_arguments(args.musicbee_args, prefix)], env=env, cwd=app)
 
 
 MPRISBEE_VERSION = "1.0.3"
@@ -1449,7 +1506,8 @@ def create_parser() -> argparse.ArgumentParser:
         ),
     )
     sub = parser.add_subparsers(dest="command", metavar="{install,init,repair-dependencies,music-dir,config,tabs,tools,backup,launcher,media-controls,status}")
-    sub.add_parser("desktop-setup")
+    desktop_setup = sub.add_parser("desktop-setup")
+    desktop_setup.add_argument("files", nargs=argparse.REMAINDER)
     explorer = sub.add_parser("explorer-dispatch")
     explorer.add_argument("arguments", nargs=argparse.REMAINDER)
     dispatch = sub.add_parser("tools-dispatch")
@@ -1496,6 +1554,29 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
+LAUNCH_HELP = """\
+Usage: musicbee [FILE_OR_FOLDER | MUSICBEE_OPTIONS]
+
+Launch MusicBee or send a command to an existing instance. Linux paths are
+translated to Wine paths; Windows paths and URLs are passed through.
+
+  /Play TARGET       Play a file, folder, playlist, cue sheet or URL
+  /QueueNext TARGET  Queue a target next
+  /QueueLast TARGET  Add a target to the end of the queue
+  /PlayPause         Toggle playback
+  /PlayResume        Resume the previous playback state
+  /Next, /Previous   Skip to the next or previous track
+  /Stop              Stop playback
+  /StartAutoDj       Start Auto DJ
+  /PlayLibraryShuffled  Play the library shuffled
+  /OpenCompactPlayer, /OpenMiniPlayer  Open a smaller player
+  /VolumeDown, /VolumeUp  Adjust volume
+  -h, --help         Show this help
+
+For installation and configuration, run musicbee-manage --help.
+"""
+
+
 def main() -> int:
     parser = create_parser()
     arguments = sys.argv[1:]
@@ -1507,6 +1588,9 @@ def main() -> int:
     elif executable == "musicbee.py" and arguments and arguments[0] == "--launch":
         manager = False
         arguments = arguments[1:]
+    if not manager and arguments in (["-h"], ["--help"]):
+        print(LAUNCH_HELP, end="")
+        return 0
     args = parser.parse_args(arguments) if manager else None
     if manager and args.command is None:
         parser.print_help()
@@ -1531,7 +1615,7 @@ def main() -> int:
         elif args.command == "desktop-setup":
             first_launch(argparse.Namespace(archive=None,
                                             accept_license=False, no_launch=True), paths)
-            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--launch"],
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--launch", *args.files],
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True)
         elif args.command == "backup":
