@@ -35,6 +35,7 @@ jobs:
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           version="$(python3 src/musicbee-manage.py --version)"
           [[ "$RELEASE_TAG" == "v${version#musicbee-manage }" ]]
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git merge-base --is-ancestor HEAD origin/main
       - name: Install pinned nFPM
         shell: bash
