@@ -1,0 +1,92 @@
+name: Deploy Fedora repository
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published release tag to deploy
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    container: fedora:44
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Install verification tools
+        run: dnf -y install git python3 rpm gnupg2 gh tar gzip
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
+          persist-credentials: false
+      - name: Fetch and verify the published repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          version="$(python3 src/musicbee-manage.py --version)"
+          [[ "$RELEASE_TAG" == "v${version#musicbee-manage }" ]]
+          [[ "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" == false ]]
+          latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+          [[ "$RELEASE_TAG" == "$latest" ]] || { echo 'Only the latest published release can be deployed.' >&2; exit 1; }
+          mkdir -p build/download build/site
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir build/download \
+            --pattern musicbee-repository.tar.gz --pattern 'musicbee-*.noarch.rpm'
+          python3 - <<'PY'
+          import tarfile
+          from pathlib import Path
+          with tarfile.open('build/download/musicbee-repository.tar.gz', 'r:gz') as archive:
+              if any(not (member.isfile() or member.isdir()) for member in archive.getmembers()):
+                  raise SystemExit('Repository archive contains an unsupported entry')
+              archive.extractall(Path('build/site'), filter='data')
+          PY
+          fingerprint="$(tr -d '[:space:]' < packaging/rpm-signing-fingerprint)"
+          key=build/site/RPM-GPG-KEY-musicbee
+          actual="$(gpg --batch --with-colons --show-keys "$key" | awk -F: '$1 == "fpr" && !seen++ { print $10 }')"
+          [[ "$actual" == "$fingerprint" ]]
+          export GNUPGHOME
+          GNUPGHOME="$(mktemp -d)"
+          trap 'gpgconf --kill gpg-agent || true; rm -rf "$GNUPGHOME"' EXIT
+          chmod 700 "$GNUPGHOME"
+          gpg --batch --import "$key"
+          gpg --batch --verify build/site/rpm/repodata/repomd.xml.asc build/site/rpm/repodata/repomd.xml
+          python3 scripts/verify-rpm-metadata.py build/site/rpm
+          mkdir "$GNUPGHOME/keyring"
+          cp "$key" "$GNUPGHOME/keyring/gpg-pubkey-${fingerprint,,}.key"
+          shopt -s nullglob
+          signed=(build/site/rpm/*.rpm)
+          asset=(build/download/*.rpm)
+          [[ ${#signed[@]} -eq 1 && ${#asset[@]} -eq 1 ]]
+          [[ "$(rpm -qp --qf '%{VERSION}' "${signed[0]}")" == "${RELEASE_TAG#v}" ]]
+          cmp "${signed[0]}" "${asset[0]}"
+          rpmkeys --define '_keyring fs' --define "_keyringpath $GNUPGHOME/keyring" \
+            --define '_pkgverify_level signature' --checksig "${signed[0]}"
+          test -f build/site/index.html
+          test -f build/site/musicbee.repo
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/site
+
+  deploy:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

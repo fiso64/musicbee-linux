@@ -26,7 +26,7 @@ Install Python, Wine, Winetricks, cabextract, icoutils and 7-Zip using your dist
 ```bash
 git clone https://github.com/fiso64/musicbee-linux.git
 cd musicbee-linux
-python3 src/musicbee.py install ~/Downloads/MusicBeePortable_*.zip
+python3 src/musicbee-manage.py install ~/Downloads/MusicBeePortable_*.zip
 ```
 
 Manual installation has not yet been tested on every distribution.
@@ -77,6 +77,7 @@ This package already includes most of the known tweaks to get MusicBee running s
 Additional optional tweaks can be listed with `musicbee-manage config`. If you're having issues, look here first. Example usage:
 
 ```bash
+musicbee-manage --version                 # version of this integration
 musicbee-manage config                    # list all settings
 musicbee-manage config gdiplus            # describe a setting
 musicbee-manage config audio-latency on   # example: sometimes useful against stuttering

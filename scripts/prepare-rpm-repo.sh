@@ -28,11 +28,19 @@ trap cleanup EXIT
 mkdir -p "$repo_dir/rpm"
 cp -- "$rpm_file" "$repo_dir/rpm/"
 rpm_name="$(basename "$rpm_file")"
-rpmsign --define "_gpg_name $key_fingerprint" --addsign "$repo_dir/rpm/$rpm_name"
+sign_args=()
+gpg_args=()
+if [[ -n "${MUSICBEE_SIGNING_PASSPHRASE_FILE:-}" ]]; then
+  [[ -f "$MUSICBEE_SIGNING_PASSPHRASE_FILE" ]] || { echo 'Signing passphrase file not found.' >&2; exit 1; }
+  printf -v escaped_passphrase_file '%q' "$MUSICBEE_SIGNING_PASSPHRASE_FILE"
+  sign_args=(--define "_gpg_sign_cmd_extra_args --batch --pinentry-mode loopback --passphrase-file $escaped_passphrase_file")
+  gpg_args=(--pinentry-mode loopback --passphrase-file "$MUSICBEE_SIGNING_PASSPHRASE_FILE")
+fi
+rpmsign --define "_gpg_name $key_fingerprint" "${sign_args[@]}" --addsign "$repo_dir/rpm/$rpm_name"
 gpg --batch --armor --export "$key_fingerprint" > "$repo_dir/RPM-GPG-KEY-musicbee"
 [[ -s "$repo_dir/RPM-GPG-KEY-musicbee" ]] || { echo 'Could not export the public key.' >&2; exit 1; }
 createrepo_c "$repo_dir/rpm"
-gpg --batch --yes --local-user "$key_fingerprint" --armor --detach-sign \
+gpg --batch --yes "${gpg_args[@]}" --local-user "$key_fingerprint" --armor --detach-sign \
   --output "$repo_dir/rpm/repodata/repomd.xml.asc" "$repo_dir/rpm/repodata/repomd.xml"
 gpg --batch --verify "$repo_dir/rpm/repodata/repomd.xml.asc" "$repo_dir/rpm/repodata/repomd.xml"
 # Verify against an isolated file keyring, without writing to an RPM database.

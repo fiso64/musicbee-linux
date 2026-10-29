@@ -26,6 +26,8 @@ import tempfile
 import zipfile
 from pathlib import PurePosixPath
 
+__version__ = "0.2.0"
+
 
 class SetupError(Exception):
     pass
@@ -35,7 +37,7 @@ def locations() -> dict[str, Path]:
     home = Path.home()
     state = Path(os.environ.get("XDG_DATA_HOME", home / ".local/share")).expanduser() / "musicbee"
     prefix = state / "wineprefix"
-    packaged = Path(__file__).resolve() == Path("/usr/libexec/musicbee/musicbee.py")
+    packaged = Path(__file__).resolve() == Path("/usr/libexec/musicbee/musicbee-manage.py")
     launcher = Path("/usr/bin/musicbee") if packaged else home / ".local/bin/musicbee"
     return {
         "home": home, "state": state, "prefix": prefix,
@@ -1505,6 +1507,7 @@ def create_parser() -> argparse.ArgumentParser:
             "Download MusicBee Portable, then run: musicbee-manage install /path/to/MusicBeePortable.zip\n"
         ),
     )
+    parser.add_argument("--version", action="version", version=f"musicbee-manage {__version__}")
     sub = parser.add_subparsers(dest="command", metavar="{install,init,repair-dependencies,music-dir,config,tabs,tools,backup,launcher,media-controls,status}")
     desktop_setup = sub.add_parser("desktop-setup")
     desktop_setup.add_argument("files", nargs=argparse.REMAINDER)
@@ -1581,11 +1584,11 @@ def main() -> int:
     parser = create_parser()
     arguments = sys.argv[1:]
     executable = Path(sys.argv[0]).name
-    manager = executable in ("musicbee-manage", "musicbee.py")
-    if executable == "musicbee.py" and arguments and arguments[0] == "--manage":
+    manager = executable in ("musicbee-manage", "musicbee-manage.py")
+    if executable == "musicbee-manage.py" and arguments and arguments[0] == "--manage":
         manager = True
         arguments = arguments[1:]
-    elif executable == "musicbee.py" and arguments and arguments[0] == "--launch":
+    elif executable == "musicbee-manage.py" and arguments and arguments[0] == "--launch":
         manager = False
         arguments = arguments[1:]
     if not manager and arguments in (["-h"], ["--help"]):

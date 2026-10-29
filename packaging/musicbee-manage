@@ -1,2 +1,2 @@
 #!/bin/sh
-exec /usr/bin/python3 /usr/libexec/musicbee/musicbee.py --manage "$@"
+exec /usr/bin/python3 /usr/libexec/musicbee/musicbee-manage.py --manage "$@"

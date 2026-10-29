@@ -1,7 +1,7 @@
 name: musicbee
 arch: all
 platform: linux
-version: 0.1.0
+version: ${MUSICBEE_VERSION}
 release: 1
 section: sound
 priority: optional
@@ -9,10 +9,9 @@ license: GPL-3.0-only
 homepage: https://github.com/fiso64/musicbee-linux
 description: |
   Unofficial MusicBee Portable integration for Linux via Wine.
-  Sets up a per-user Wine prefix and runs a user-supplied MusicBee application.
 contents:
-  - src: src/musicbee.py
-    dst: /usr/libexec/musicbee/musicbee.py
+  - src: src/musicbee-manage.py
+    dst: /usr/libexec/musicbee/musicbee-manage.py
     file_info:
       mode: 0755
   - src: packaging/musicbee

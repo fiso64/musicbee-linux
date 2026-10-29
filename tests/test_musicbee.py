@@ -11,7 +11,7 @@ import unittest
 import zipfile
 from unittest.mock import patch
 
-SRC = Path(__file__).resolve().parents[1] / 'src' / 'musicbee.py'
+SRC = Path(__file__).resolve().parents[1] / 'src' / 'musicbee-manage.py'
 loader = SourceFileLoader('musicbee_linux', str(SRC))
 spec = spec_from_loader(loader.name, loader)
 mb = module_from_spec(spec)
@@ -113,7 +113,7 @@ class PortableExtractionTests(unittest.TestCase):
                  patch.object(mb, 'locations', return_value=paths), \
                  patch.object(mb, 'run') as run, patch.object(mb, 'configure') as configure:
                 for argv in (['musicbee', '/Play', r'C:\Music\song.mp3'],
-                             ['musicbee.py', '--launch', '/Play', r'C:\Music\song.mp3']):
+                             ['musicbee-manage.py', '--launch', '/Play', r'C:\Music\song.mp3']):
                     with patch.object(mb.sys, 'argv', argv):
                         self.assertEqual(mb.main(), 0)
                         self.assertEqual(run.call_args.args[0].musicbee_args, ['/Play', r'C:\Music\song.mp3'])
@@ -121,14 +121,14 @@ class PortableExtractionTests(unittest.TestCase):
                     with patch.object(mb.sys, 'argv', argv):
                         self.assertEqual(mb.main(), 0)
                         self.assertEqual(run.call_args.args[0].musicbee_args, argv[1:])
-                for argv in (['musicbee-manage', 'config'], ['musicbee.py', '--manage', 'config']):
+                for argv in (['musicbee-manage', 'config'], ['musicbee-manage.py', '--manage', 'config']):
                     with patch.object(mb.sys, 'argv', argv):
                         self.assertEqual(mb.main(), 0)
                 self.assertEqual(configure.call_count, 2)
 
     def test_launcher_help_does_not_start_musicbee(self):
         for argv in (['musicbee', '-h'], ['musicbee', '--help'],
-                     ['musicbee.py', '--launch', '--help']):
+                     ['musicbee-manage.py', '--launch', '--help']):
             with self.subTest(argv=argv), patch.object(mb.sys, 'argv', argv), \
                  patch('sys.stdout', new_callable=io.StringIO) as output, \
                  patch.object(mb, 'run') as run:
@@ -136,6 +136,23 @@ class PortableExtractionTests(unittest.TestCase):
                 self.assertIn('musicbee-manage --help', output.getvalue())
                 self.assertIn('/QueueNext', output.getvalue())
                 run.assert_not_called()
+
+    def test_manager_version_and_launcher_version_argument(self):
+        with patch.object(mb.sys, 'argv', ['musicbee-manage', '--version']), \
+             patch('sys.stdout', new_callable=io.StringIO) as output:
+            with self.assertRaises(SystemExit) as result:
+                mb.main()
+            self.assertEqual(result.exception.code, 0)
+            self.assertEqual(output.getvalue().strip(), f'musicbee-manage {mb.__version__}')
+        with TemporaryDirectory() as tmp:
+            app = Path(tmp)
+            (app / 'MusicBee.exe').touch()
+            with patch.object(mb.sys, 'argv', ['musicbee', '--version']), \
+                 patch.object(mb.os, 'geteuid', return_value=1000), \
+                 patch.object(mb, 'locations', return_value={'app': app}), \
+                 patch.object(mb, 'run') as run:
+                self.assertEqual(mb.main(), 0)
+                self.assertEqual(run.call_args.args[0].musicbee_args, ['--version'])
 
     def test_tabs_move_preserves_settings_and_selected_tab(self):
         with TemporaryDirectory() as tmp:

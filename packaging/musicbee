@@ -1,2 +1,2 @@
 #!/bin/sh
-exec /usr/bin/python3 /usr/libexec/musicbee/musicbee.py --launch "$@"
+exec /usr/bin/python3 /usr/libexec/musicbee/musicbee-manage.py --launch "$@"
