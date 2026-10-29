@@ -19,6 +19,46 @@ loader.exec_module(mb)
 
 
 class PortableExtractionTests(unittest.TestCase):
+    def test_tabs_move_preserves_settings_and_selected_tab(self):
+        with TemporaryDirectory() as tmp:
+            prefix = Path(tmp) / 'prefix'
+            app = prefix / 'drive_c' / 'MusicBee'
+            settings = app / 'AppData' / 'MusicBee3Settings.ini'
+            settings.parent.mkdir(parents=True)
+            original = (b'<Settings>\r\n<NavigatorInitialTabs>\r\n'
+                        b' <NavigationLocation><TextOverride>One</TextOverride><Value>\x00</Value></NavigationLocation>\r\n'
+                        b' <NavigationLocation><TextOverride>Two &amp; More</TextOverride></NavigationLocation>\r\n'
+                        b' <NavigationLocation><FolderCategory>7</FolderCategory></NavigationLocation>\r\n'
+                        b'</NavigatorInitialTabs>\r\n<NavigatorInitialTabIndex>1</NavigatorInitialTabIndex>\r\n</Settings>')
+            settings.write_bytes(original)
+            paths = {'prefix': prefix, 'app': app}
+            output = io.StringIO()
+            with patch('sys.stdout', output):
+                mb.manage_tabs(argparse.Namespace(settings=None, source=None, destination=None), paths)
+            self.assertIn('2. Two & More', output.getvalue())
+            mb.manage_tabs(argparse.Namespace(settings=None, source=2, destination=1), paths)
+            changed = settings.read_bytes()
+            self.assertLess(changed.index(b'Two &amp; More'), changed.index(b'One'))
+            self.assertIn(b'<NavigatorInitialTabIndex>0</NavigatorInitialTabIndex>', changed)
+            self.assertIn(b'<Value>\x00</Value>', changed)
+            mb.manage_tabs(argparse.Namespace(settings=None, source=1, destination=2), paths)
+            self.assertEqual(settings.read_bytes(), original)
+
+    def test_tabs_requires_choice_when_settings_are_ambiguous(self):
+        with TemporaryDirectory() as tmp:
+            prefix = Path(tmp) / 'prefix'
+            app = prefix / 'drive_c' / 'MusicBee'
+            portable = app / 'AppData' / 'MusicBee3Settings.ini'
+            profile = prefix / 'drive_c' / 'users' / mb.getpass.getuser() / 'AppData' / 'Roaming' / 'MusicBee' / 'MusicBee3Settings.ini'
+            for path in (portable, profile):
+                path.parent.mkdir(parents=True)
+                path.touch()
+            paths = {'prefix': prefix, 'app': app}
+            with self.assertRaisesRegex(mb.SetupError, 'Use --settings'):
+                mb.tab_settings_path(paths, None)
+            self.assertEqual(mb.tab_settings_path(paths, 'portable'), portable)
+            self.assertEqual(mb.tab_settings_path(paths, 'profile'), profile)
+
     def create_archive(self, tmp: Path) -> Path:
         sfx = tmp / 'MusicBeePortable_3_6.exe'
         # Python's zipfile accepts plain ZIP-format SFX executables.
@@ -292,6 +332,22 @@ class PortableExtractionTests(unittest.TestCase):
                     mb.configure(argparse.Namespace(option='allfonts', value='on'), paths)
             self.assertEqual(mb.tweak_value(mb.read_config(paths['state']), 'allfonts'), 'off')
 
+    def test_windows_version_applied_and_saved_only_on_success(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prefix = root / 'prefix'
+            prefix.mkdir()
+            (prefix / '.musicbee-bootstrap-complete').touch()
+            paths = {'state': root / 'state', 'prefix': prefix}
+            with patch.object(mb, 'apply_windows_version') as apply:
+                mb.configure(argparse.Namespace(option='windows-version', value='10'), paths)
+                apply.assert_called_once_with('10', prefix)
+                self.assertEqual(mb.tweak_value(mb.read_config(paths['state']), 'windows-version'), '10')
+                apply.side_effect = mb.SetupError('failed')
+                with self.assertRaises(mb.SetupError):
+                    mb.configure(argparse.Namespace(option='windows-version', value='8.1'), paths)
+            self.assertEqual(mb.tweak_value(mb.read_config(paths['state']), 'windows-version'), '10')
+
     def test_run_applies_gdiplus_and_audio_settings(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -304,12 +360,15 @@ class PortableExtractionTests(unittest.TestCase):
             args = argparse.Namespace(musicbee_args=[])
             with patch.object(mb, 'require_ready'), patch.object(mb, 'validate_mapping'), \
                  patch.object(mb, 'require_commands'), patch.object(mb, 'call') as command, \
+                 patch.object(mb, 'apply_windows_version') as windows_version, \
                  patch.dict(mb.os.environ, {'PULSE_LATENCY_MSEC': '25'}):
                 mb.run(args, paths)
+                windows_version.assert_called_once_with('8.1', paths['prefix'])
                 self.assertEqual(command.call_args.kwargs['env']['WINEDLLOVERRIDES'], '*gdiplus=n,b;gdiplus=n,b')
                 self.assertEqual(command.call_args.kwargs['env']['PULSE_LATENCY_MSEC'], '25')
-                mb.write_config(paths['state'], {'tweaks': {'gdiplus': 'wine', 'audio-latency': 'on'}})
+                mb.write_config(paths['state'], {'tweaks': {'gdiplus': 'wine', 'audio-latency': 'on', 'windows-version': '10'}})
                 mb.run(args, paths)
+                windows_version.assert_called_once()
                 self.assertEqual(command.call_args.kwargs['env']['WINEDLLOVERRIDES'], '*gdiplus=b;gdiplus=b')
                 self.assertEqual(command.call_args.kwargs['env']['PULSE_LATENCY_MSEC'], '60')
 
@@ -430,11 +489,13 @@ class PortableExtractionTests(unittest.TestCase):
                                       accept_license=True, no_launch=True)
             mb.write_config(state, {'tweaks': {'gdiplus': 'wine'}})
             with patch.object(mb, 'ensure_bootstrap', side_effect=fake_wine_bootstrap), \
+                 patch.object(mb, 'apply_windows_version') as windows_version, \
                  patch.object(mb, 'record_environment'), \
                  patch.object(mb, 'extract_musicbee_icon', return_value=None), \
                  patch.object(mb, 'ensure_media_controls') as media_mock:
                 mb.first_launch(args, paths)
                 media_mock.assert_called_once_with(paths)
+                windows_version.assert_called_once_with('8.1', prefix)
             self.assertTrue((paths['app'] / 'MusicBee.exe').is_file())
             self.assertEqual(json.loads((state/'config.json').read_text())['windows_music_path'],
                              f'C:\\Users\\{mb.getpass.getuser()}\\Music')

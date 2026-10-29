@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import fcntl
 import getpass
 import hashlib
+import html
 import json
 import stat
 import os
@@ -115,6 +116,9 @@ TWEAKS = {
     "native-file-manager": ("on", ("on", "off"),
         "Open MusicBee folders in a Linux file manager instead of Wine Explorer. "
         "File selection depends on desktop support; restart MusicBee after changing this."),
+    "windows-version": ("8.1", ("8.1", "10"),
+        "Windows version reported by the MusicBee Wine prefix. Windows 8.1 can fix "
+        "window border artifacts; use Windows 10 for troubleshooting."),
 }
 
 
@@ -141,6 +145,11 @@ def apply_font_tweak(name: str, value: str, prefix: Path) -> None:
         verb = "allfonts" if name == "allfonts" else (
             "fontsmooth=rgb" if value == "on" else "fontsmooth=disable")
         call(["winetricks", "-q", verb], env=wine_env(prefix))
+
+
+def apply_windows_version(value: str, prefix: Path) -> None:
+    require_commands("winetricks")
+    call(["winetricks", "-q", {"8.1": "win81", "10": "win10"}[value]], env=wine_env(prefix))
 
 
 def configure(args: argparse.Namespace, paths: dict[str, Path]) -> None:
@@ -173,12 +182,19 @@ def configure(args: argparse.Namespace, paths: dict[str, Path]) -> None:
         die(f"Invalid value for {name}: {args.value!r}. Choose: {', '.join(values)}.")
     if name in ("allfonts", "font-smoothing") and (paths["prefix"] / ".musicbee-bootstrap-complete").is_file():
         apply_font_tweak(name, value, paths["prefix"])
+    if name == "windows-version" and (paths["prefix"] / ".musicbee-bootstrap-complete").is_file():
+        with (paths["prefix"] / ".musicbee.launch.lock").open("a+") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                die("Close MusicBee before changing the Windows version.")
+            apply_windows_version(value, paths["prefix"])
     config.setdefault("tweaks", {})[name] = value
     write_config(paths["state"], config)
     print(f"{name} = {value}")
     if name == "allfonts" and value == "off":
         print("Previously installed fonts remain in the Wine prefix.")
-    if name in ("allfonts", "font-smoothing") and not (paths["prefix"] / ".musicbee-bootstrap-complete").is_file():
+    if name in ("allfonts", "font-smoothing", "windows-version") and not (paths["prefix"] / ".musicbee-bootstrap-complete").is_file():
         print("The setting will be applied during initial setup.")
     else:
         print("Restart MusicBee to apply this setting.")
@@ -403,6 +419,97 @@ def matching_child(parent: Path, name: str) -> Path:
     if len(matches) > 1:
         die(f"Ambiguous case-insensitive directory names in {parent}: {name}")
     return matches[0] if matches else parent / name
+
+
+def tab_settings_path(paths: dict[str, Path], selection: str | None) -> Path:
+    portable = paths["app"]
+    for part in ("AppData", "MusicBee3Settings.ini"):
+        portable = matching_child(portable, part)
+    profile = paths["prefix"] / "drive_c"
+    for part in ("users", getpass.getuser(), "AppData", "Roaming", "MusicBee", "MusicBee3Settings.ini"):
+        profile = matching_child(profile, part)
+    candidates = {name: path for name, path in (("portable", portable), ("profile", profile)) if path.is_file()}
+    if selection:
+        if selection not in candidates:
+            die(f"No {selection} MusicBee settings file found.")
+        return candidates[selection]
+    if len(candidates) == 1:
+        return next(iter(candidates.values()))
+    if not candidates:
+        die("MusicBee settings not found. Start and close MusicBee first.")
+    print("Both MusicBee settings files exist. Choose the one MusicBee uses:")
+    for name, path in candidates.items():
+        print(f"  {name}: {path}")
+    if not sys.stdin.isatty():
+        die("Use --settings portable or --settings profile to choose the active file.")
+    selection = input("Settings [portable/profile]: ").strip().casefold()
+    if selection not in candidates:
+        die("Choose portable or profile, or use --settings on the command line.")
+    return candidates[selection]
+
+
+def manage_tabs(args: argparse.Namespace, paths: dict[str, Path]) -> None:
+    if (args.source is None) != (args.destination is None):
+        die("Provide both the current and new position, or neither to list tabs.")
+    prefix = paths["prefix"]
+    if not prefix.is_dir():
+        die("MusicBee is not set up yet.")
+    with (prefix / ".musicbee.launch.lock").open("a+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            die("Close MusicBee before managing tabs.")
+        path = tab_settings_path(paths, args.settings).resolve()
+        data = path.read_bytes()
+        sections = list(re.finditer(rb"<NavigatorInitialTabs>(.*?)</NavigatorInitialTabs>", data, re.DOTALL))
+        if len(sections) != 1:
+            die("Could not find a unique tab list in the settings file.")
+        section = sections[0]
+        body = section.group(1)
+        entries = list(re.finditer(rb"<NavigationLocation>.*?</NavigationLocation>", body, re.DOTALL))
+        if not entries or b"".join(re.split(rb"<NavigationLocation>.*?</NavigationLocation>", body, flags=re.DOTALL)).strip():
+            die("The saved tab list has an unsupported format.")
+        blocks = [entry.group() for entry in entries]
+        if args.source is None:
+            print(f"Settings: {path}")
+            for index, block in enumerate(blocks, 1):
+                def field(name: bytes) -> str:
+                    match = re.search(rb"<" + name + rb">(.*?)</" + name + rb">", block, re.DOTALL)
+                    return html.unescape(match.group(1).decode("utf-8", errors="replace")).strip() if match else ""
+                label = field(b"TextOverride") or field(b"CustLayoutName") or f"Category {field(b'FolderCategory') or '?'}"
+                print(f"  {index}. {label}")
+            print("Move a tab: musicbee tabs CURRENT_POSITION NEW_POSITION")
+            return
+        source, destination = args.source - 1, args.destination - 1
+        if not (0 <= source < len(blocks) and 0 <= destination < len(blocks)):
+            die(f"Tab positions must be between 1 and {len(blocks)}.")
+        if source == destination:
+            print("Tab is already in that position.")
+            return
+        order = list(range(len(blocks)))
+        order.insert(destination, order.pop(source))
+        parts, end = [], 0
+        for entry, original_index in zip(entries, order):
+            parts.extend((body[end:entry.start()], blocks[original_index]))
+            end = entry.end()
+        parts.append(body[end:])
+        result = data[:section.start(1)] + b"".join(parts) + data[section.end(1):]
+        index_pattern = rb"(<NavigatorInitialTabIndex>)(\d+)(</NavigatorInitialTabIndex>)"
+        indexes = list(re.finditer(index_pattern, result))
+        if len(indexes) == 1 and int(indexes[0].group(2)) < len(order):
+            index = indexes[0]
+            new_index = str(order.index(int(index.group(2)))).encode("ascii")
+            result = result[:index.start(2)] + new_index + result[index.end(2):]
+        fd, temp = tempfile.mkstemp(prefix=".musicbee-tabs-", dir=path.parent)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(result)
+            os.chmod(temp, stat.S_IMODE(path.stat().st_mode))
+            os.replace(temp, path)
+        finally:
+            if os.path.exists(temp):
+                os.unlink(temp)
+        print(f"Moved tab {source + 1} to position {destination + 1}.")
 
 
 def mapping_target(prefix: Path, value: str, *, create_parents: bool) -> Path:
@@ -650,7 +757,6 @@ def ensure_bootstrap(prefix: Path, *, refresh: bool) -> None:
         print("Installing .NET 4.8 and MusicBee dependencies (interactive prompts may appear) ...")
         call(["winetricks", "-q", "dotnet48", "xmllite", "corefonts", "cjkfonts", "gdiplus"],
              env=wine_env(prefix))
-        call(["winetricks", "-q", "win10"], env=wine_env(prefix))
         marker.touch()
     else:
         print("Existing Wine prefix found; skipping Winetricks dependencies.")
@@ -673,6 +779,9 @@ def setup(args: argparse.Namespace, paths: dict[str, Path]) -> None:
     print(f"Linux music directory: {host}")
     print(f"Windows library location: {winpath}")
     ensure_bootstrap(prefix, refresh=args.refresh_dependencies)
+    version = tweak_value(old, "windows-version")
+    apply_windows_version(version, prefix)
+    old.setdefault("tweaks", {})["windows-version"] = version
     if tweak_value(old, "allfonts") == "on":
         apply_font_tweak("allfonts", "on", prefix)
     if tweak_value(old, "font-smoothing") == "on":
@@ -791,6 +900,11 @@ def run(args: argparse.Namespace, paths: dict[str, Path]) -> None:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             die("MusicBee already appears to be running from this prefix.")
+        if "windows-version" not in config.get("tweaks", {}):
+            version = tweak_value(config, "windows-version")
+            apply_windows_version(version, prefix)
+            config.setdefault("tweaks", {})["windows-version"] = version
+            write_config(paths["state"], config)
         configure_explorer_redirect(paths, tweak_value(config, "native-file-manager") == "on")
         extra = args.musicbee_args
         if extra and extra[0] == "--":
@@ -1314,7 +1428,7 @@ def create_parser() -> argparse.ArgumentParser:
             "Keep upstream MusicBee issues separate from Linux packaging issues."
         ),
     )
-    sub = parser.add_subparsers(dest="command", metavar="{init,setup,install,run,config,tools,backup,launcher,media-controls,status}")
+    sub = parser.add_subparsers(dest="command", metavar="{init,setup,install,run,config,tabs,tools,backup,launcher,media-controls,status}")
     sub.add_parser("desktop-setup")
     explorer = sub.add_parser("explorer-dispatch")
     explorer.add_argument("arguments", nargs=argparse.REMAINDER)
@@ -1343,6 +1457,10 @@ def create_parser() -> argparse.ArgumentParser:
     conf = sub.add_parser("config", help="View or change Wine and playback tweaks")
     conf.add_argument("option", nargs="?", help="Setting to inspect or change")
     conf.add_argument("value", nargs="?", help="New value, or info for details")
+    tabs = sub.add_parser("tabs", help="List or rearrange saved MusicBee tabs")
+    tabs.add_argument("--settings", choices=("portable", "profile"), help="Choose which settings file to use")
+    tabs.add_argument("source", nargs="?", type=int, metavar="CURRENT_POSITION")
+    tabs.add_argument("destination", nargs="?", type=int, metavar="NEW_POSITION")
     toolp = sub.add_parser("tools", help="Configure native Linux external tools")
     tool_actions = toolp.add_subparsers(dest="action", required=True)
     add_tool = tool_actions.add_parser("add", help="Register a tool using a Linux command")
@@ -1392,6 +1510,8 @@ def main() -> int:
             backup(args, paths)
         elif args.command == "config":
             configure(args, paths)
+        elif args.command == "tabs":
+            manage_tabs(args, paths)
         elif args.command == "tools":
             manage_tools(args, paths)
         elif args.command == "tools-dispatch":
