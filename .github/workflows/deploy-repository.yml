@@ -1,4 +1,4 @@
-name: Deploy Fedora repository
+name: Deploy package repositories
 on:
   release:
     types: [published]
@@ -25,7 +25,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Install verification tools
-        run: dnf -y install git python3 rpm gnupg2 gh tar gzip diffutils
+        run: dnf -y install git python3 rpm gnupg2 gh tar gzip diffutils binutils
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
@@ -42,7 +42,7 @@ jobs:
           [[ "$RELEASE_TAG" == "$latest" ]] || { echo 'Only the latest published release can be deployed.' >&2; exit 1; }
           mkdir -p build/download build/site
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir build/download \
-            --pattern musicbee-repository.tar.gz --pattern 'musicbee-*.noarch.rpm'
+            --pattern musicbee-repository.tar.gz --pattern 'musicbee-*.noarch.rpm' --pattern 'musicbee_*_all.deb'
           python3 - <<'PY'
           import tarfile
           from pathlib import Path
@@ -72,6 +72,9 @@ jobs:
           cmp "${signed[0]}" "${asset[0]}"
           rpmkeys --define '_keyring fs' --define "_keyringpath $GNUPGHOME/keyring" \
             --define '_pkgverify_level signature' --checksig "${signed[0]}"
+          debs=(build/download/*.deb)
+          [[ ${#debs[@]} -eq 1 ]]
+          python3 scripts/apt-repository.py verify build/site "${debs[0]}" "$key" "${RELEASE_TAG#v}"
           test -f build/site/index.html
           test -f build/site/musicbee.repo
       - uses: actions/upload-pages-artifact@v4

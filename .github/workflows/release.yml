@@ -22,7 +22,7 @@ jobs:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - name: Install build tools
-        run: dnf -y install git python3 rpm-sign createrepo_c gnupg2 tar gzip curl gh
+        run: dnf -y install git python3 rpm-sign createrepo_c gnupg2 tar gzip curl gh binutils
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
@@ -48,7 +48,7 @@ jobs:
         run: |
           python3 -m unittest discover -s tests -v
           bash -n scripts/*.sh
-      - name: Build signed RPM and repository
+      - name: Build packages and signed repositories
         shell: bash
         env:
           RPM_SIGNING_KEY: ${{ secrets.RPM_SIGNING_KEY }}
@@ -70,17 +70,23 @@ jobs:
           printf '%s\n' "$RPM_SIGNING_PASSPHRASE" > "$MUSICBEE_SIGNING_PASSPHRASE_FILE"
           unset RPM_SIGNING_PASSPHRASE
           ./scripts/build-package.sh rpm build/release-package
+          ./scripts/build-package.sh deb build/release-package
           shopt -s nullglob
           packages=(build/release-package/*.rpm)
           [[ ${#packages[@]} -eq 1 ]]
+          debs=(build/release-package/*.deb)
+          [[ ${#debs[@]} -eq 1 ]]
           ./scripts/prepare-rpm-repo.sh "${packages[0]}" "$fingerprint" | tee build/repository-prepare.log
           site="$(sed -n 's/^Signed repository prepared at: //p' build/repository-prepare.log)"
           [[ -f "$site/rpm/repodata/repomd.xml.asc" ]]
           python3 scripts/verify-rpm-metadata.py "$site/rpm"
+          python3 scripts/apt-repository.py build "$site" "${debs[0]}" "$site/RPM-GPG-KEY-musicbee" "$fingerprint"
+          python3 scripts/apt-repository.py verify "$site" "${debs[0]}" "$site/RPM-GPG-KEY-musicbee" "${RELEASE_TAG#v}"
           cp website/index.html "$site/index.html"
           chmod -R a+rX "$site"
           mkdir -p build/release-assets
           cp "$site"/rpm/*.rpm build/release-assets/
+          cp "${debs[0]}" build/release-assets/
           tar -C "$site" -czf build/release-assets/musicbee-repository.tar.gz .
       - name: Create draft GitHub Release
         shell: bash

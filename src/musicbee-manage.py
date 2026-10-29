@@ -15,6 +15,7 @@ import html
 import json
 import stat
 import os
+import platform
 from pathlib import Path
 import re
 import shlex
@@ -26,7 +27,7 @@ import tempfile
 import zipfile
 from pathlib import PurePosixPath
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 class SetupError(Exception):
@@ -51,15 +52,64 @@ def die(message: str) -> None:
     raise SetupError(message)
 
 
-def require_commands(*names: str) -> None:
-    missing = [name for name in names if shutil.which(name) is None]
+def wine_selection(prefix: Path | None = None) -> str:
+    state = prefix.parent if prefix is not None else locations()["state"]
+    return tweak_value(read_config(state), "wine")
+
+
+def wine_path(prefix: Path | None = None) -> str:
+    path = os.environ.get("PATH", os.defpath)
+    staging = Path("/opt/wine-staging/bin")
+    if wine_selection(prefix) == "staging":
+        if not os.access(staging / "wine", os.X_OK):
+            die("WineHQ Staging not found at /opt/wine-staging/bin/wine. Install it or set wine to auto.")
+        return str(staging) + os.pathsep + path
+    if not shutil.which("wine", path=path) and os.access(staging / "wine", os.X_OK):
+        return str(staging) + os.pathsep + path
+    return path
+
+
+def require_commands(*names: str, prefix: Path | None = None) -> None:
+    path = wine_path(prefix)
+    missing = [name for name in names if shutil.which(name, path=path) is None]
     if missing:
         die(f"Missing required commands: {', '.join(missing)}. Install Wine, Winetricks and cabextract through your package manager.")
+
+
+def wine_server(prefix: Path | None = None) -> str:
+    if wine_selection(prefix) == "staging":
+        candidate = Path("/opt/wine-staging/bin/wineserver")
+        if not os.access(candidate, os.X_OK):
+            die(f"WineHQ Staging server not found: {candidate}")
+        return str(candidate)
+    configured = os.environ.get("WINESERVER")
+    if configured:
+        return configured
+    found = shutil.which("wineserver", path=wine_path(prefix))
+    if found:
+        return found
+    multiarch = {"x86_64": "x86_64-linux-gnu", "aarch64": "aarch64-linux-gnu",
+                 "i686": "i386-linux-gnu", "armv7l": "arm-linux-gnueabihf"}.get(platform.machine())
+    if multiarch:
+        candidate = Path("/usr/lib") / multiarch / "wine/wineserver"
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    die("Wine server not found. Install a complete Wine package.")
 
 
 def wine_env(prefix: Path, *, init: bool = False) -> dict[str, str]:
     env = dict(os.environ)
     env["WINEPREFIX"] = str(prefix)
+    env["PATH"] = wine_path(prefix)
+    if wine_selection(prefix) == "staging":
+        env["WINE"] = "/opt/wine-staging/bin/wine"
+        env["WINELOADER"] = env["WINE"]
+        env["WINESERVER"] = wine_server(prefix)
+    if not env.get("WINESERVER") and not shutil.which("wineserver", path=env["PATH"]):
+        try:
+            env["WINESERVER"] = wine_server(prefix)
+        except SetupError:
+            pass
     env.setdefault("WINEDEBUG", "-all")
     # External overrides would compromise repeatability. Apply the required
     # bootstrap override only during creation, not during .NET installation.
@@ -103,6 +153,9 @@ def write_config(state: Path, config: dict) -> None:
 
 
 TWEAKS = {
+    "wine": ("auto", ("auto", "staging"),
+        "Choose Wine for MusicBee. Auto uses Wine on PATH, falling back to WineHQ Staging; "
+        "staging selects WineHQ Staging in /opt/wine-staging. Switching Wine can update the prefix."),
     "audio-latency": ("off", ("on", "off"),
         "Set PulseAudio-compatible latency to 60 ms to help with stuttering. "
         "May increase audio delay; off leaves the environment unchanged."),
@@ -137,7 +190,7 @@ def tweak_value(config: dict, name: str) -> str:
 def apply_font_tweak(name: str, value: str, prefix: Path) -> None:
     if name == "allfonts" and value == "off":
         return
-    require_commands("winetricks")
+    require_commands("winetricks", prefix=prefix)
     lock_path = prefix / ".musicbee.launch.lock"
     with lock_path.open("a") as lock:
         try:
@@ -150,7 +203,7 @@ def apply_font_tweak(name: str, value: str, prefix: Path) -> None:
 
 
 def apply_windows_version(value: str, prefix: Path) -> None:
-    require_commands("winetricks")
+    require_commands("winetricks", prefix=prefix)
     call(["winetricks", "-q", {"8.1": "win81", "10": "win10"}[value]], env=wine_env(prefix))
 
 
@@ -182,6 +235,10 @@ def configure(args: argparse.Namespace, paths: dict[str, Path]) -> None:
     value = args.value.casefold()
     if value not in values:
         die(f"Invalid value for {name}: {args.value!r}. Choose: {', '.join(values)}.")
+    if name == "wine" and value == "staging":
+        for executable in ("wine", "wineboot", "winepath", "wineserver"):
+            if not os.access(Path("/opt/wine-staging/bin") / executable, os.X_OK):
+                die(f"WineHQ Staging is missing {executable} in /opt/wine-staging/bin.")
     if name in ("allfonts", "font-smoothing") and (paths["prefix"] / ".musicbee-bootstrap-complete").is_file():
         apply_font_tweak(name, value, paths["prefix"])
     if name == "windows-version" and (paths["prefix"] / ".musicbee-bootstrap-complete").is_file():
@@ -301,7 +358,7 @@ def dispatch_tool(name: str, windows_paths: list[str], paths: dict[str, Path]) -
         die(f"Native tool is not configured: {name}")
     if not windows_paths:
         die("No selected files were passed to the native tool.")
-    require_commands("winepath")
+    require_commands("winepath", prefix=paths["prefix"])
     translated = []
     for windows_path in windows_paths:
         result = subprocess.run(["winepath", "-u", windows_path], env=wine_env(paths["prefix"]),
@@ -784,21 +841,23 @@ def make_launcher(binary: Path, desktop: Path, icon: Path | None = None, *, setu
 
 def record_environment(state: Path, prefix: Path) -> None:
     lines = [f"Recorded: {datetime.now(timezone.utc).isoformat()}"]
+    env = wine_env(prefix)
     for cmd in (["wine", "--version"], ["winetricks", "--version"]):
-        if shutil.which(cmd[0]):
-            result = subprocess.run(cmd, env=wine_env(prefix), text=True,
+        if shutil.which(cmd[0], path=env["PATH"]):
+            result = subprocess.run(cmd, env=env, text=True,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
             lines.append("$ " + " ".join(cmd) + "\n" + result.stdout.strip())
     (state / "environment.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def ensure_bootstrap(prefix: Path, *, refresh: bool) -> None:
-    require_commands("wine", "wineboot", "wineserver", "winetricks", "cabextract")
+    require_commands("wine", "wineboot", "winetricks", "cabextract", prefix=prefix)
+    server = wine_server(prefix)
     prefix.parent.mkdir(parents=True, exist_ok=True)
     if not (prefix / "system.reg").is_file():
         print("Creating dedicated 64-bit/WoW64 Wine prefix ...")
         call(["wineboot", "--init"], env=wine_env(prefix, init=True))
-        call(["wineserver", "-w"], env=wine_env(prefix))
+        call([server, "-w"], env=wine_env(prefix))
     marker = prefix / ".musicbee-bootstrap-complete"
     if not marker.exists() or refresh:
         print("Installing .NET 4.8 and MusicBee dependencies (interactive prompts may appear) ...")
@@ -944,7 +1003,7 @@ def musicbee_arguments(arguments: list[str], prefix: Path) -> list[str]:
                    or arg.startswith(("./", "../", "~/"))
                    or (arg.startswith("/") and "/" in arg[1:]))
         if not switch and not windows_path and not url and is_path:
-            require_commands("winepath")
+            require_commands("winepath", prefix=prefix)
             converted = subprocess.run(["winepath", "-w", str(candidate.absolute())],
                                        env=wine_env(prefix), text=True, capture_output=True, check=False)
             if converted.returncode or not converted.stdout.strip():
@@ -960,7 +1019,7 @@ def run(args: argparse.Namespace, paths: dict[str, Path]) -> None:
     prefix, app = paths["prefix"], paths["app"]
     require_ready(prefix)
     config = read_config(paths["state"])
-    require_commands("wine")
+    require_commands("wine", prefix=prefix)
     if not (app / "MusicBee.exe").is_file():
         die(r"MusicBee.exe not found at C:\MusicBee; use the install command first.")
     env = wine_env(prefix)
@@ -1167,9 +1226,10 @@ def download_mpris_archive(state: Path) -> Path:
 
 
 def wine_version(prefix: Path) -> str:
-    if not shutil.which("wine"):
+    env = wine_env(prefix)
+    if not shutil.which("wine", path=env["PATH"]):
         return "Wine not found"
-    result = subprocess.run(["wine", "--version"], env=wine_env(prefix),
+    result = subprocess.run(["wine", "--version"], env=env,
                             text=True, capture_output=True, check=False)
     return (result.stdout or result.stderr).strip()
 
@@ -1180,7 +1240,7 @@ def media_controls(args: argparse.Namespace, paths: dict[str, Path]) -> None:
     print(f"Wine: {version}")
     if "staging" not in version.casefold():
         print("WARNING: MPRISBee v1.0.3 needs Wine Staging or equivalent AF_UNIX patches. "
-              "Fedora's standard Wine build might not work. This tool does not replace your Wine packages.")
+              "Your Wine build may not support media controls.")
     if args.action == "status":
         print(f"MPRISBee installed: {plugin.is_file()}")
         private = plugin.parent / "MPRISBee"

@@ -2,7 +2,7 @@
 
 Run MusicBee on Linux with Wine. Includes most of the known tweaks to get MusicBee running smoothly.
 
-Packages are currently available for Fedora; packages for other distributions are pending. You can install manually on any distro.
+Packages are available for Fedora and Ubuntu. You can also install manually on other distributions.
 
 ## Installing
 
@@ -18,6 +18,19 @@ sudo dnf install musicbee
 
 musicbee-manage install ~/Downloads/MusicBeePortable_*.zip
 ```
+
+### Ubuntu
+
+```bash
+sudo wget -O /etc/apt/sources.list.d/musicbee.sources \
+  https://fiso64.github.io/musicbee-linux/musicbee.sources
+sudo apt update
+sudo apt install musicbee
+
+musicbee-manage install ~/Downloads/MusicBeePortable_*.zip
+```
+
+Ubuntu 26.04's default Wine runs MusicBee, but Linux media controls need WineHQ Staging or a Wine build with equivalent AF_UNIX support. See [WineHQ's installation guide](https://gitlab.winehq.org/wine/wine/-/wikis/Debian-Ubuntu), then select it with `musicbee-manage config wine staging`.
 
 ### Manual install
 
@@ -114,20 +127,23 @@ Installing plugins works as usual: Just follow their normal install process.
 
 ## Uninstalling
 
-On Fedora:
+Uninstalling this package leaves MusicBee and its settings in place. You can delete its wine prefix to fully remove it.
 
 ```bash
+# Fedora
 sudo dnf remove musicbee
-```
 
-For a manual installation:
+# Ubuntu
+sudo apt remove musicbee
 
-```bash
+# Manual installs
 rm -f ~/.local/bin/musicbee ~/.local/bin/musicbee-manage ~/.local/share/applications/musicbee.desktop
 ```
 
-This leaves your music, settings and Wine prefix in place. Integration data is
-stored in `~/.local/share/musicbee` by default.
+## Credits
+
+- Steven Mayall, for [MusicBee](https://getmusicbee.com/) (the best music player).
+- Kyletsit and UrbanCMC, for [MPRISBee and its fork](https://github.com/UrbanCMC/mb_MPRISBee), which provide Linux media integration.
 
 ## License
 

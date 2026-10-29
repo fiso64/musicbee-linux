@@ -5,6 +5,7 @@ version: ${MUSICBEE_VERSION}
 release: 1
 section: sound
 priority: optional
+maintainer: fiso64 <sokfilix@gmail.com>
 license: GPL-3.0-only
 homepage: https://github.com/fiso64/musicbee-linux
 description: |
@@ -35,6 +36,15 @@ contents:
     file_info:
       mode: 0644
 overrides:
+  deb:
+    depends:
+      - python3
+      - wine | wine-staging | wine-devel | wine-stable
+      - winetricks
+      - cabextract
+      - 7zip | p7zip-full
+    recommends:
+      - icoutils
   rpm:
     depends:
       - python3

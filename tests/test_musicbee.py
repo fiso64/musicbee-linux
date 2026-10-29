@@ -19,6 +19,57 @@ loader.exec_module(mb)
 
 
 class PortableExtractionTests(unittest.TestCase):
+    def test_ubuntu_wineserver_is_used_for_wine_and_winetricks(self):
+        server = '/usr/lib/x86_64-linux-gnu/wine/wineserver'
+        with patch.dict(mb.os.environ, {}, clear=True), \
+             patch.object(mb, 'wine_selection', return_value='auto'), \
+             patch.object(mb.shutil, 'which', return_value=None), \
+             patch.object(mb.platform, 'machine', return_value='x86_64'), \
+             patch.object(Path, 'is_file', return_value=True), \
+             patch.object(mb.os, 'access', side_effect=lambda path, mode: str(path) == server):
+            self.assertEqual(mb.wine_server(), server)
+            self.assertEqual(mb.wine_env(Path('/tmp/prefix'))['WINESERVER'], server)
+
+    def test_winehq_staging_fallback_keeps_helpers_together(self):
+        with patch.dict(mb.os.environ, {'PATH': '/usr/bin'}, clear=True), \
+             patch.object(mb.shutil, 'which', side_effect=lambda name, path=None:
+                          f'/opt/wine-staging/bin/{name}' if path.startswith('/opt/wine-staging/bin:') else None), \
+             patch.object(mb.os, 'access', return_value=True):
+            env = mb.wine_env(Path('/tmp/prefix'))
+            self.assertTrue(env['PATH'].startswith('/opt/wine-staging/bin:'))
+            self.assertEqual(mb.wine_server(), '/opt/wine-staging/bin/wineserver')
+            mb.require_commands('wine', 'winepath', 'wineboot', 'wineserver')
+
+    def test_existing_wine_on_path_takes_precedence_over_staging(self):
+        with patch.dict(mb.os.environ, {'PATH': '/custom/bin:/usr/bin'}, clear=True), \
+             patch.object(mb.shutil, 'which', return_value='/custom/bin/wine'), \
+             patch.object(mb.os, 'access', return_value=True):
+            self.assertEqual(mb.wine_path(), '/custom/bin:/usr/bin')
+
+    def test_explicit_staging_uses_matching_wine_and_helpers(self):
+        with TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            prefix = state / 'wineprefix'
+            paths = {'state': state, 'prefix': prefix}
+            with patch.dict(mb.os.environ, {'PATH': '/usr/bin', 'WINESERVER': '/old/wineserver'}, clear=True), \
+                 patch.object(mb.os, 'access', return_value=True):
+                mb.configure(argparse.Namespace(option='wine', value='staging'), paths)
+                env = mb.wine_env(prefix)
+                self.assertEqual(env['WINE'], '/opt/wine-staging/bin/wine')
+                self.assertEqual(env['WINESERVER'], '/opt/wine-staging/bin/wineserver')
+                self.assertTrue(env['PATH'].startswith('/opt/wine-staging/bin:'))
+                mb.configure(argparse.Namespace(option='wine', value='auto'), paths)
+                self.assertEqual(mb.tweak_value(mb.read_config(state), 'wine'), 'auto')
+
+    def test_staging_setting_rejects_missing_installation_without_saving(self):
+        with TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            with patch.object(mb.os, 'access', return_value=False):
+                with self.assertRaisesRegex(mb.SetupError, 'missing wine'):
+                    mb.configure(argparse.Namespace(option='wine', value='staging'),
+                                 {'state': state, 'prefix': state / 'wineprefix'})
+            self.assertEqual(mb.read_config(state), {})
+
     def test_musicbee_path_arguments(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

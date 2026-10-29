@@ -8,7 +8,7 @@ if [[ $# -lt 1 || $# -gt 2 ]]; then
 fi
 fingerprint="$1"
 pages="${2:-$root/build/pages-publish}"
-for cmd in git python3 nfpm rpmsign rpm rpmkeys gpg createrepo_c; do
+for cmd in git python3 nfpm rpmsign rpm rpmkeys gpg createrepo_c ar; do
   command -v "$cmd" >/dev/null || { echo "Missing required command: $cmd" >&2; exit 1; }
 done
 [[ "$fingerprint" =~ ^([[:xdigit:]]{40}|[[:xdigit:]]{64})$ ]] || {
@@ -49,10 +49,13 @@ stage="$(mktemp -d "$root/build/release-$version.XXXXXXXX")"
 echo "Preparing release in $stage"
 python3 -m unittest discover -s "$root/tests" -q
 "$root/scripts/build-package.sh" rpm "$stage/packages"
+"$root/scripts/build-package.sh" deb "$stage/packages"
 shopt -s nullglob
 packages=("$stage/packages/"*.rpm)
 [[ ${#packages[@]} -eq 1 ]] || { echo 'Expected exactly one built RPM.' >&2; exit 1; }
 package="${packages[0]}"
+debs=("$stage/packages/"*.deb)
+[[ ${#debs[@]} -eq 1 ]] || { echo 'Expected exactly one built DEB.' >&2; exit 1; }
 new_version="$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$package")"
 [[ "$new_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$ ]] || {
   echo "Unexpected RPM version: $new_version" >&2; exit 1;
@@ -68,13 +71,17 @@ done
 "$root/scripts/prepare-rpm-repo.sh" "$package" "$fingerprint" | tee "$stage/prepare.log"
 prepared="$(sed -n 's/^Signed repository prepared at: //p' "$stage/prepare.log")"
 [[ -n "$prepared" && -d "$prepared/rpm/repodata" ]] || { echo 'Repository preparation failed.' >&2; exit 1; }
+python3 "$root/scripts/apt-repository.py" build "$prepared" "${debs[0]}" "$prepared/RPM-GPG-KEY-musicbee" "$fingerprint"
+python3 "$root/scripts/apt-repository.py" verify "$prepared" "${debs[0]}" "$prepared/RPM-GPG-KEY-musicbee" "$version"
 git clone --no-local --branch gh-pages "$pages" "$stage/pages"
 git -C "$stage/pages" remote set-url origin "$origin"
 # This is a new disposable clone: replace its RPM directory so only the new
 # package and matching metadata are published. Preserve the site's other files.
 rm -rf -- "$stage/pages/rpm"
+rm -rf -- "$stage/pages/apt"
 cp -R -- "$prepared/rpm" "$stage/pages/rpm"
-cp -- "$prepared/musicbee.repo" "$prepared/RPM-GPG-KEY-musicbee" "$stage/pages/"
+cp -R -- "$prepared/apt" "$stage/pages/apt"
+cp -- "$prepared/musicbee.repo" "$prepared/musicbee.sources" "$prepared/RPM-GPG-KEY-musicbee" "$stage/pages/"
 cp -- "$prepared/.nojekyll" "$stage/pages/.nojekyll"
 [[ "$(git -C "$root" rev-parse HEAD)" == "$source_commit" && -z "$(git -C "$root" status --porcelain)" ]] || {
   echo 'Source changed during preparation; commit the changes and start again.' >&2; exit 1;

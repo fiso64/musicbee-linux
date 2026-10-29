@@ -59,12 +59,18 @@ class ReleaseWorkflowTests(unittest.TestCase):
             gpg.write_text(f'''#!/bin/bash
 case " $* " in
   *" --show-keys "*) printf 'fpr:::::::::{FINGERPRINT}:\\n' ;;
-  *" --export "*) printf 'test public key\\n' ;;
+  *" --export "*) printf '%s\\n' '-----BEGIN PGP PUBLIC KEY BLOCK-----' '' 'TEST' '-----END PGP PUBLIC KEY BLOCK-----' ;;
   *" --detach-sign "*)
     while [[ $# -gt 0 ]]; do
       if [[ "$1" == --output ]]; then printf 'test signature\\n' > "$2"; break; fi
       shift
     done ;;
+  *" --clearsign "*)
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == --output ]]; then output="$2"; shift 2; else input="$1"; shift; fi
+    done
+    cp "$input" "$output" ;;
+  *" --decrypt "*) cat "${{@: -1}}" ;;
 esac
 ''')
             (fakebin / 'rpmsign').write_text('#!/bin/sh\nprintf "%s\\n" "$*"\n')
@@ -87,6 +93,8 @@ esac
             self.assertEqual([p.name for p in (stage / 'pages' / 'rpm').glob('*.rpm')],
                              [f'musicbee-{VERSION}-1.noarch.rpm'])
             self.assertTrue((stage / 'pages' / 'rpm' / 'repodata' / 'repomd.xml.asc').is_file())
+            self.assertTrue((stage / 'pages' / 'apt/dists/stable/InRelease').is_file())
+            self.assertTrue((stage / 'pages' / 'musicbee.sources').is_file())
             verifier = source / 'scripts' / 'verify-rpm-metadata.py'
             subprocess.run(['python3', str(verifier), str(stage / 'pages' / 'rpm')], check=True,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
