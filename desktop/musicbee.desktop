@@ -2,7 +2,7 @@
 Type=Application
 Name=MusicBee
 GenericName=Music Player
-Comment=Unofficial MusicBee Portable via Wine
+Comment=MusicBee Music Player via Wine
 Exec=musicbee-manage desktop-setup %f
 Terminal=true
 Icon=multimedia-audio-player

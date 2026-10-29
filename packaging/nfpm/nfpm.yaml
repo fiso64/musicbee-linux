@@ -8,7 +8,7 @@ priority: optional
 license: GPL-3.0-only
 homepage: https://github.com/fiso64/musicbee-linux
 description: |
-  Unofficial MusicBee Portable integration for Linux via Wine.
+  The MusicBee music player via Wine.
 contents:
   - src: src/musicbee-manage.py
     dst: /usr/libexec/musicbee/musicbee-manage.py
