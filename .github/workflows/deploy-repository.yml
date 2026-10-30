@@ -35,8 +35,8 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          version="$(python3 src/musicbee-manage.py --version)"
-          [[ "$RELEASE_TAG" == "v${version#musicbee-manage }" ]]
+          version="$(python3 -c 'import runpy; print(runpy.run_path("src/musicbee-manage.py")["__version__"])')"
+          [[ "$RELEASE_TAG" == "v$version" ]]
           [[ "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" == false ]]
           latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
           [[ "$RELEASE_TAG" == "$latest" ]] || { echo 'Only the latest published release can be deployed.' >&2; exit 1; }

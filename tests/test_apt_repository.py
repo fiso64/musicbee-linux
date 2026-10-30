@@ -2,6 +2,7 @@
 import importlib.util
 import os
 from pathlib import Path
+import runpy
 import shutil
 import subprocess
 import tempfile
@@ -37,8 +38,7 @@ class AptRepositoryTests(unittest.TestCase):
             subprocess.run([str(ROOT / 'scripts/build-package.sh'), 'deb', str(root / 'packages')],
                            cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
             deb = next((root / 'packages').glob('*.deb'))
-            version = subprocess.check_output(['python3', str(ROOT / 'src/musicbee-manage.py'), '--version'],
-                                              text=True).strip().removeprefix('musicbee-manage ')
+            version = runpy.run_path(str(ROOT / 'src/musicbee-manage.py'))['__version__']
             site = root / 'site'
             site.mkdir()
             with patch.dict(os.environ, {'GNUPGHOME': str(home)}):

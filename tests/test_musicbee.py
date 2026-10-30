@@ -268,22 +268,40 @@ class PortableExtractionTests(unittest.TestCase):
                 self.assertIn('/QueueNext', output.getvalue())
                 run.assert_not_called()
 
-    def test_manager_version_and_launcher_version_argument(self):
-        with patch.object(mb.sys, 'argv', ['musicbee-manage', '--version']), \
-             patch('sys.stdout', new_callable=io.StringIO) as output:
-            with self.assertRaises(SystemExit) as result:
-                mb.main()
-            self.assertEqual(result.exception.code, 0)
-            self.assertEqual(output.getvalue().strip(), f'musicbee-manage {mb.__version__}')
+    def test_manager_and_launcher_report_same_versions(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {'app': root / 'app', 'prefix': root / 'prefix'}
+            reports = []
+            for executable in ('musicbee', 'musicbee-manage'):
+                with patch.object(mb.sys, 'argv', [executable, '--version']), \
+                     patch.object(mb, 'locations', return_value=paths), \
+                     patch.object(mb, 'wine_env', side_effect=mb.SetupError('missing')), \
+                     patch('sys.stdout', new_callable=io.StringIO) as output, \
+                     patch.object(mb, 'run') as run:
+                    self.assertEqual(mb.main(), 0)
+                    reports.append(output.getvalue())
+                    run.assert_not_called()
+            self.assertEqual(reports[0], reports[1])
+            self.assertIn(f'musicbee-linux {mb.__version__}', reports[0])
+            self.assertIn('- musicbee/version: not installed', reports[0])
+
+    def test_musicbee_version_reads_version_resource(self):
+        import struct
         with TemporaryDirectory() as tmp:
             app = Path(tmp)
             (app / 'MusicBee.exe').touch()
-            with patch.object(mb.sys, 'argv', ['musicbee', '--version']), \
-                 patch.object(mb.os, 'geteuid', return_value=1000), \
-                 patch.object(mb, 'locations', return_value={'app': app}), \
-                 patch.object(mb, 'run') as run:
-                self.assertEqual(mb.main(), 0)
-                self.assertEqual(run.call_args.args[0].musicbee_args, ['--version'])
+            key = 'VS_VERSION_INFO\0'.encode('utf-16le')
+            header = struct.pack('<HHH', 92, 52, 0) + key
+            header += bytes((-len(header)) % 4)
+            resource = header + struct.pack('<IIII', 0xFEEF04BD, 0x10000,
+                                            (3 << 16) | 7, (9773 << 16) | 28129) + bytes(36)
+            with patch.object(mb.shutil, 'which', return_value='/usr/bin/wrestool'), \
+                 patch.object(mb.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, resource)):
+                self.assertEqual(mb.musicbee_version(app), '3.7.9773.28129')
+            with patch.object(mb.shutil, 'which', return_value='/usr/bin/wrestool'), \
+                 patch.object(mb.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, b'bad')):
+                self.assertEqual(mb.musicbee_version(app), 'unknown')
 
     def test_tabs_move_preserves_settings_and_selected_tab(self):
         with TemporaryDirectory() as tmp:

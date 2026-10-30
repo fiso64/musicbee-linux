@@ -130,13 +130,12 @@ This package already includes most of the known tweaks to get MusicBee running s
 Additional optional tweaks can be listed with `musicbee-manage config`. If you're having issues, look here first. Example usage:
 
 ```bash
-musicbee-manage --version                 # version of this integration
 musicbee-manage config                    # list all settings
 musicbee-manage config gdiplus            # describe a setting
 musicbee-manage config audio-latency on   # example: sometimes useful against stuttering
 ```
 
-For desktop launch problems, check `~/.local/share/musicbee/desktop-launch.log` (or `$XDG_DATA_HOME/musicbee/desktop-launch.log`). For more Wine diagnostics when launching from a terminal, run `WINEDEBUG=warn+all musicbee`.
+For desktop launch problems, check `~/.local/share/musicbee/desktop-launch.log` (or `$XDG_DATA_HOME/musicbee/desktop-launch.log`). For more Wine diagnostics when launching from a terminal, run `WINEDEBUG=warn+all musicbee`. Please include `musicbee-manage --version` output when opening issues.
 
 <details>
   <summary><b>Known problems</b></summary>

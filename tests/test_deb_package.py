@@ -1,5 +1,6 @@
 """Check the built DEB rather than only its packaging configuration."""
 import io
+import runpy
 from pathlib import Path
 import shutil
 import subprocess
@@ -19,9 +20,7 @@ class DebPackageTests(unittest.TestCase):
                            cwd=ROOT, check=True, stdout=subprocess.PIPE, text=True)
             packages = list(Path(tmp).glob('*.deb'))
             self.assertEqual(len(packages), 1)
-            version = subprocess.check_output(
-                ['python3', str(ROOT / 'src/musicbee-manage.py'), '--version'], text=True
-            ).strip().removeprefix('musicbee-manage ')
+            version = runpy.run_path(str(ROOT / 'src/musicbee-manage.py'))['__version__']
             self.assertEqual(packages[0].name, f'musicbee_{version}-1_all.deb')
 
             def archive(name):

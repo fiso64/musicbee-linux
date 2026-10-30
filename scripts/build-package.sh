@@ -12,6 +12,5 @@ mkdir -p "$target"
 target="$(cd "$target" && pwd)"
 cd "$root"
 export MUSICBEE_VERSION
-MUSICBEE_VERSION="$(python3 src/musicbee-manage.py --version)"
-MUSICBEE_VERSION="${MUSICBEE_VERSION#musicbee-manage }"
+MUSICBEE_VERSION="$(python3 -c 'import runpy; print(runpy.run_path("src/musicbee-manage.py")["__version__"])')"
 nfpm package --config packaging/nfpm/nfpm.yaml --packager "$format" --target "$target/"

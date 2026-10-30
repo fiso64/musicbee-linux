@@ -14,6 +14,7 @@ import hashlib
 import html
 import json
 import stat
+import struct
 import os
 import platform
 from pathlib import Path
@@ -50,6 +51,54 @@ def locations() -> dict[str, Path]:
 
 def die(message: str) -> None:
     raise SetupError(message)
+
+
+def musicbee_version(app: Path) -> str:
+    exe = app / "MusicBee.exe"
+    if not exe.is_file():
+        return "not installed"
+    if not shutil.which("wrestool"):
+        return "unknown (wrestool unavailable)"
+    try:
+        result = subprocess.run(["wrestool", "--raw", "-x", "-t", "16", "-n", "1", str(exe)],
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True, timeout=5)
+        data = result.stdout
+        length, value_length, value_type = struct.unpack_from("<HHH", data)
+        key = "VS_VERSION_INFO\0".encode("utf-16le")
+        offset = (6 + len(key) + 3) & ~3
+        if (length > len(data) or length < offset + 52 or value_length < 52 or value_type != 0
+                or data[6:6 + len(key)] != key):
+            return "unknown"
+        signature, _, ms, ls = struct.unpack_from("<IIII", data, offset)
+        if signature != 0xFEEF04BD:
+            return "unknown"
+        return ".".join(str(part) for part in (ms >> 16, ms & 0xffff, ls >> 16, ls & 0xffff))
+    except (OSError, subprocess.SubprocessError, struct.error):
+        return "unknown"
+
+
+def version_report(paths: dict[str, Path]) -> str:
+    try:
+        release = platform.freedesktop_os_release()
+        os_version = release.get("PRETTY_NAME", "unknown")
+    except (OSError, AttributeError):
+        os_version = "unknown"
+    try:
+        env = wine_env(paths["prefix"])
+        if shutil.which("wine", path=env["PATH"]):
+            result = subprocess.run(["wine", "--version"], env=env, capture_output=True,
+                                    text=True, timeout=5, check=True)
+            wine = result.stdout.strip() or "unknown"
+        else:
+            wine = "not found"
+    except (SetupError, OSError, subprocess.SubprocessError, ValueError):
+        wine = "unknown"
+    return (f"musicbee-linux {__version__}\n"
+            f"- musicbee/version: {musicbee_version(paths['app'])}\n"
+            f"- wine/version: {wine}\n"
+            f"- os/version: {os_version}\n"
+            f"- os/kernel: {platform.release()} ({platform.machine()})\n"
+            f"- python/version: {platform.python_version()}")
 
 
 def wine_selection(prefix: Path | None = None) -> str:
@@ -1703,7 +1752,7 @@ def create_parser() -> argparse.ArgumentParser:
             "Download MusicBee Portable, then run: musicbee-manage install /path/to/MusicBeePortable.zip\n"
         ),
     )
-    parser.add_argument("--version", action="version", version=f"musicbee-manage {__version__}")
+    parser.add_argument("--version", action="store_true", help="Show version and system information")
     sub = parser.add_subparsers(dest="command", metavar="{install,init,repair-dependencies,aac,music-dir,config,tabs,tools,backup,launcher,media-controls,status}")
     desktop_setup = sub.add_parser("desktop-setup")
     desktop_setup.add_argument("files", nargs=argparse.REMAINDER)
@@ -1774,6 +1823,7 @@ translated to Wine paths; Windows paths and URLs are passed through.
   /OpenCompactPlayer, /OpenMiniPlayer  Open a smaller player
   /VolumeDown, /VolumeUp  Adjust volume
   -h, --help         Show this help
+  --version          Show version and system information
 
 For installation and configuration, run musicbee-manage --help.
 """
@@ -1790,10 +1840,16 @@ def main() -> int:
     elif executable == "musicbee-manage.py" and arguments and arguments[0] == "--launch":
         manager = False
         arguments = arguments[1:]
+    if arguments == ["--version"]:
+        print(version_report(locations()))
+        return 0
     if not manager and arguments in (["-h"], ["--help"]):
         print(LAUNCH_HELP, end="")
         return 0
     args = parser.parse_args(arguments) if manager else None
+    if manager and args.version:
+        print(version_report(locations()))
+        return 0
     if manager and args.command is None:
         parser.print_help()
         return 0
