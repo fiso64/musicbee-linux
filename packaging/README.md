@@ -1,7 +1,7 @@
 # Packaging and releases
 
 `nfpm/nfpm.yaml` describes the Linux integration packages. MusicBee itself is
-separate. The integration version lives in `src/musicbee-manage.py`; nFPM and
+separate. The integration version lives in `src/musicbee_linux/__init__.py`; nFPM and
 `musicbee-manage --version` use that same value. Arch metadata is in the same
 configuration. AUR files are generated from it and pin the released source commit;
 AUR publication is not automated.
@@ -29,7 +29,7 @@ GitHub; don't commit it. GitHub supplies `GITHUB_TOKEN` automatically.
 
 ## Release
 
-1. Update the code, bump `__version__` in `src/musicbee-manage.py`, then commit
+1. Update the code, bump `__version__` in `src/musicbee_linux/__init__.py`, then commit
    and push to `main`.
 2. Create and push the matching tag, for example:
 

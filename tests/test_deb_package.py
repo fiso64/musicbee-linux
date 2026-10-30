@@ -20,7 +20,7 @@ class DebPackageTests(unittest.TestCase):
                            cwd=ROOT, check=True, stdout=subprocess.PIPE, text=True)
             packages = list(Path(tmp).glob('*.deb'))
             self.assertEqual(len(packages), 1)
-            version = runpy.run_path(str(ROOT / 'src/musicbee-manage.py'))['__version__']
+            version = runpy.run_path(str(ROOT / 'src/musicbee_linux/__init__.py'))['__version__']
             self.assertEqual(packages[0].name, f'musicbee_{version}-1_all.deb')
 
             def archive(name):
@@ -39,4 +39,14 @@ class DebPackageTests(unittest.TestCase):
                 for path in ('./usr/bin/musicbee', './usr/bin/musicbee-manage',
                              './usr/libexec/musicbee/musicbee-manage.py'):
                     self.assertTrue(data_archive.getmember(path).mode & 0o111, path)
+                for path in ('./usr/libexec/musicbee/musicbee_linux/settings.py',
+                             './usr/libexec/musicbee/musicbee_linux/paths.py',
+                             './usr/libexec/musicbee/musicbee_linux/archive.py',
+                             './usr/libexec/musicbee/musicbee_linux/install.py',
+                             './usr/libexec/musicbee/musicbee_linux/cli.py',
+                             './usr/libexec/musicbee/musicbee_linux/wine.py',
+                             './usr/libexec/musicbee/musicbee_linux/desktop.py',
+                             './usr/libexec/musicbee/musicbee_linux/media_controls.py',
+                             './usr/libexec/musicbee/musicbee_linux/utils.py'):
+                    self.assertIsNotNone(data_archive.getmember(path))
                 self.assertIsNotNone(data_archive.getmember('./usr/share/applications/musicbee.desktop'))

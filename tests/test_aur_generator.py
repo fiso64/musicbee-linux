@@ -44,6 +44,10 @@ class AurGeneratorTests(unittest.TestCase):
             subprocess.run(['bash', '-c', 'source "$1"; package', 'bash', str(build)], env=env, check=True)
             for item in config['contents']:
                 installed = root / 'pkg' / item['dst'].lstrip('/')
+                if '*' in item['src']:
+                    for module in (ROOT / 'src/musicbee_linux').glob('*.py'):
+                        self.assertTrue((installed / module.name).is_file())
+                    continue
                 self.assertTrue(installed.is_file(), installed)
                 self.assertEqual(installed.stat().st_mode & 0o777, item['file_info']['mode'])
 

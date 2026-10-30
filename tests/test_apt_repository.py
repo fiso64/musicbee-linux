@@ -38,7 +38,7 @@ class AptRepositoryTests(unittest.TestCase):
             subprocess.run([str(ROOT / 'scripts/build-package.sh'), 'deb', str(root / 'packages')],
                            cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
             deb = next((root / 'packages').glob('*.deb'))
-            version = runpy.run_path(str(ROOT / 'src/musicbee-manage.py'))['__version__']
+            version = runpy.run_path(str(ROOT / 'src/musicbee_linux/__init__.py'))['__version__']
             site = root / 'site'
             site.mkdir()
             with patch.dict(os.environ, {'GNUPGHOME': str(home)}):

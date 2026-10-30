@@ -18,6 +18,6 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Test distro-neutral CLI
         run: |
-          python3 -m py_compile src/musicbee-manage.py
+          python3 -m py_compile src/*.py src/musicbee_linux/*.py
           python3 -m unittest discover -s tests -v
           bash -n scripts/*.sh

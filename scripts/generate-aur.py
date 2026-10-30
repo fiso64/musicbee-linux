@@ -56,7 +56,12 @@ def generate(config: dict, version: str, commit: str) -> tuple[str, str]:
         mode = item.get('file_info', {}).get('mode', 0o644)
         if isinstance(mode, str):
             mode = int(mode, 8)
-        lines.append(f'  install -Dm{mode:03o} {q(str(src))} "$pkgdir"{q(str(dst))}')
+        if '*' in src.name:
+            if src.name != '*.py' or src.parent != PurePosixPath('src/musicbee_linux'):
+                raise ValueError(f'Unsupported package glob: {src}')
+            lines.append(f'  for file in {src.parent}/*.py; do install -Dm{mode:03o} "$file" "$pkgdir"{q(str(dst))}/"${{file##*/}}"; done')
+        else:
+            lines.append(f'  install -Dm{mode:03o} {q(str(src))} "$pkgdir"{q(str(dst))}')
     lines += ['}', '']
     srcinfo = [f'pkgbase = {name}']
     for key in ('pkgdesc', 'pkgver', 'pkgrel', 'url'):
@@ -74,7 +79,7 @@ def main() -> None:
     parser.add_argument('--output', required=True, type=Path, help='Output directory')
     args = parser.parse_args()
     config = yaml.safe_load((ROOT / 'packaging/nfpm/nfpm.yaml').read_text())
-    version = runpy.run_path(str(ROOT / 'src/musicbee-manage.py'))['__version__']
+    version = runpy.run_path(str(ROOT / 'src/musicbee_linux/__init__.py'))['__version__']
     pkgbuild, srcinfo = generate(config, version, args.commit)
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / 'PKGBUILD').write_text(pkgbuild, encoding='utf-8')

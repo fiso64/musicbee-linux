@@ -74,7 +74,7 @@ jobs:
           packages=(build/arch-package/*.pkg.tar.zst)
           [[ ${#packages[@]} -eq 1 && -f "${packages[0]}" ]]
           bash scripts/prepare-arch-repo.sh "${packages[0]}" build/arch "$fingerprint"
-          version="$(python3 -c 'import runpy; print(runpy.run_path("src/musicbee-manage.py")["__version__"])')"
+          version="$(python3 -c 'import runpy; print(runpy.run_path("src/musicbee_linux/__init__.py")["__version__"])')"
           python3 scripts/verify-arch-repo.py build/arch "$version"
           chmod -R a+rX build/arch
           printf '%s:6:\n' "$fingerprint" | gpg --batch --import-ownertrust
@@ -109,7 +109,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          version="$(python3 -c 'import runpy; print(runpy.run_path("src/musicbee-manage.py")["__version__"])')"
+          version="$(python3 -c 'import runpy; print(runpy.run_path("src/musicbee_linux/__init__.py")["__version__"])')"
           [[ "$RELEASE_TAG" == "v$version" ]]
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git merge-base --is-ancestor HEAD origin/main

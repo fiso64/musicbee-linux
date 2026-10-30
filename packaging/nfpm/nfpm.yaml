@@ -15,6 +15,10 @@ contents:
     dst: /usr/libexec/musicbee/musicbee-manage.py
     file_info:
       mode: 0755
+  - src: src/musicbee_linux/*.py
+    dst: /usr/libexec/musicbee/musicbee_linux/
+    file_info:
+      mode: 0644
   - src: packaging/musicbee
     dst: /usr/bin/musicbee
     file_info:

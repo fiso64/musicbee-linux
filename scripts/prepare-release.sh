@@ -27,7 +27,7 @@ git -C "$root" rev-parse --is-inside-work-tree >/dev/null
 [[ "$(git -C "$pages" branch --show-current)" == gh-pages ]] || {
   echo "Pages checkout must be on gh-pages: $pages" >&2; exit 1;
 }
-version="$(python3 -c 'import runpy, sys; print(runpy.run_path(sys.argv[1])["__version__"])' "$root/src/musicbee-manage.py")"
+version="$(python3 -c 'import runpy, sys; print(runpy.run_path(sys.argv[1])["__version__"])' "$root/src/musicbee_linux/__init__.py")"
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
   echo "Unsupported release version: $version" >&2; exit 1;
 }

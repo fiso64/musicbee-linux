@@ -10,7 +10,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FINGERPRINT = '0123456789ABCDEF0123456789ABCDEF01234567'
-VERSION = runpy.run_path(str(ROOT / 'src' / 'musicbee-manage.py'))['__version__']
+VERSION = runpy.run_path(str(ROOT / 'src' / 'musicbee_linux' / '__init__.py'))['__version__']
 REQUIRED = ('git', 'nfpm', 'rpm', 'createrepo_c', 'gpg', 'rpmsign', 'rpmkeys')
 
 
