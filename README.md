@@ -1,8 +1,8 @@
 # MusicBee on Linux
 
-Run [MusicBee](https://getmusicbee.com/) on Linux with Wine. Includes most of the known tweaks to get MusicBee running smoothly.
+[MusicBee](https://getmusicbee.com/) is one of the best music players and library managers out there. This project installs and runs it on Linux with Wine, including most of the known tweaks to integrate and get MusicBee running smoothly.
 
-Packages are available for Fedora, Ubuntu, Debian and Arch Linux. You can also install manually on other distributions.
+Packages are available for Ubuntu, Debian, Fedora and Arch Linux. You can also install manually on other distributions.
 
 ## Installing
 
@@ -75,7 +75,7 @@ Download the **Portable Edition** from the [MusicBee download page](https://www.
 musicbee-manage install ~/Downloads/MusicBeePortable_*.zip
 ```
 
-For a manual install, run `python3 src/musicbee-manage.py install ~/Downloads/MusicBeePortable_*.zip` from the cloned directory instead. This installs the commands in `~/.local/bin`; add it to your PATH if needed.
+For manual installs, run `python3 src/musicbee-manage.py install ~/Downloads/MusicBeePortable_*.zip` from the cloned directory instead. This installs the commands in `~/.local/bin`; add it to your PATH if needed.
 
 ### Media controls
 
@@ -186,7 +186,7 @@ rm -f ~/.local/bin/musicbee ~/.local/bin/musicbee-manage ~/.local/share/applicat
 
 ## Credits
 
-- Steven Mayall, for [MusicBee](https://getmusicbee.com/) (the best music player).
+- Steven Mayall, for [MusicBee](https://getmusicbee.com/).
 - Kyletsit and UrbanCMC, for [MPRISBee and its fork](https://github.com/UrbanCMC/mb_MPRISBee), which provide Linux media integration.
 
 ## License
