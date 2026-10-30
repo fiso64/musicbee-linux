@@ -42,7 +42,7 @@ jobs:
           [[ "$RELEASE_TAG" == "$latest" ]] || { echo 'Only the latest published release can be deployed.' >&2; exit 1; }
           mkdir -p build/download build/site
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir build/download \
-            --pattern musicbee-repository.tar.gz --pattern 'musicbee-*.noarch.rpm' --pattern 'musicbee_*_all.deb'
+            --pattern musicbee-repository.tar.gz --pattern 'musicbee-*.noarch.rpm' --pattern 'musicbee_*_all.deb' --pattern '*.pkg.tar.zst'
           python3 - <<'PY'
           import tarfile
           from pathlib import Path
@@ -75,6 +75,14 @@ jobs:
           debs=(build/download/*.deb)
           [[ ${#debs[@]} -eq 1 ]]
           python3 scripts/apt-repository.py verify build/site "${debs[0]}" "$key" "${RELEASE_TAG#v}"
+          arch_packages=(build/site/arch/*.pkg.tar.zst)
+          arch_assets=(build/download/*.pkg.tar.zst)
+          [[ ${#arch_packages[@]} -eq 1 && ${#arch_assets[@]} -eq 1 ]]
+          cmp "${arch_packages[0]}" "${arch_assets[0]}"
+          gpg --batch --verify "${arch_packages[0]}.sig" "${arch_packages[0]}"
+          gpg --batch --verify build/site/arch/musicbee-linux.db.sig build/site/arch/musicbee-linux.db
+          gpg --batch --verify build/site/arch/musicbee-linux.files.sig build/site/arch/musicbee-linux.files
+          python3 scripts/verify-arch-repo.py build/site/arch "${RELEASE_TAG#v}"
           test -f build/site/index.html
           test -f build/site/musicbee.repo
       - uses: actions/upload-pages-artifact@v4

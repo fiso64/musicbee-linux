@@ -13,7 +13,83 @@ permissions:
   contents: read
 
 jobs:
+  build-arch:
+    runs-on: ubuntu-latest
+    container: fedora:44
+    steps:
+      - run: dnf -y install git python3 curl rpm
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          persist-credentials: false
+      - name: Build Arch package
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o /tmp/nfpm.rpm https://github.com/goreleaser/nfpm/releases/download/v2.48.0/nfpm-2.48.0-1.x86_64.rpm
+          echo '90188260c506d7483493c4824aee68eb3da0516746db4200b4411635aec931c4  /tmp/nfpm.rpm' | sha256sum -c -
+          rpm -i /tmp/nfpm.rpm
+          ./scripts/build-package.sh archlinux build/arch-package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch-package
+          path: build/arch-package/*.pkg.tar.zst
+          if-no-files-found: error
+
+  prepare-arch:
+    needs: build-arch
+    runs-on: ubuntu-latest
+    container: archlinux:base
+    steps:
+      - run: pacman -Syu --noconfirm --needed git gnupg python tar gzip
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: arch-package
+          path: build/arch-package
+      - name: Sign Arch repository
+        shell: bash
+        env:
+          RPM_SIGNING_KEY: ${{ secrets.RPM_SIGNING_KEY }}
+          RPM_SIGNING_PASSPHRASE: ${{ secrets.RPM_SIGNING_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          [[ -n "$RPM_SIGNING_KEY" ]] || { echo 'Missing RPM_SIGNING_KEY secret.' >&2; exit 1; }
+          export GNUPGHOME
+          GNUPGHOME="$(mktemp -d)"
+          trap 'gpgconf --kill gpg-agent || true; rm -rf "$GNUPGHOME"' EXIT
+          chmod 700 "$GNUPGHOME"
+          printf '%s' "$RPM_SIGNING_KEY" | gpg --batch --import
+          unset RPM_SIGNING_KEY
+          fingerprint="$(tr -d '[:space:]' < packaging/rpm-signing-fingerprint)"
+          actual="$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" && !seen++ { print $10 }')"
+          [[ "$actual" == "$fingerprint" ]]
+          umask 077
+          export MUSICBEE_SIGNING_PASSPHRASE_FILE="$GNUPGHOME/passphrase"
+          printf '%s\n' "$RPM_SIGNING_PASSPHRASE" > "$MUSICBEE_SIGNING_PASSPHRASE_FILE"
+          unset RPM_SIGNING_PASSPHRASE
+          packages=(build/arch-package/*.pkg.tar.zst)
+          [[ ${#packages[@]} -eq 1 && -f "${packages[0]}" ]]
+          bash scripts/prepare-arch-repo.sh "${packages[0]}" build/arch "$fingerprint"
+          version="$(python3 src/musicbee-manage.py --version)"
+          python3 scripts/verify-arch-repo.py build/arch "${version#musicbee-manage }"
+          chmod -R a+rX build/arch
+          printf '%s:6:\n' "$fingerprint" | gpg --batch --import-ownertrust
+          mkdir -p build/pacman-db
+          printf '[options]\nArchitecture = auto\nSigLevel = Required TrustedOnly\n[musicbee-linux]\nServer = file://%s/build/arch\n' "$PWD" > build/pacman-test.conf
+          pacman --config "$PWD/build/pacman-test.conf" --dbpath "$PWD/build/pacman-db" --gpgdir "$GNUPGHOME" -Sy
+          pacman --config "$PWD/build/pacman-test.conf" --dbpath "$PWD/build/pacman-db" --gpgdir "$GNUPGHOME" -Si musicbee
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch-repository
+          path: build/arch/
+          if-no-files-found: error
+
   release:
+    needs: prepare-arch
     runs-on: ubuntu-latest
     container: fedora:44
     permissions:
@@ -48,6 +124,10 @@ jobs:
         run: |
           python3 -m unittest discover -s tests -v
           bash -n scripts/*.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: arch-repository
+          path: build/arch
       - name: Build packages and signed repositories
         shell: bash
         env:
@@ -82,11 +162,18 @@ jobs:
           python3 scripts/verify-rpm-metadata.py "$site/rpm"
           python3 scripts/apt-repository.py build "$site" "${debs[0]}" "$site/RPM-GPG-KEY-musicbee" "$fingerprint"
           python3 scripts/apt-repository.py verify "$site" "${debs[0]}" "$site/RPM-GPG-KEY-musicbee" "${RELEASE_TAG#v}"
+          arch_packages=(build/arch/*.pkg.tar.zst)
+          [[ ${#arch_packages[@]} -eq 1 ]]
+          gpg --batch --verify "${arch_packages[0]}.sig" "${arch_packages[0]}"
+          gpg --batch --verify build/arch/musicbee-linux.db.sig build/arch/musicbee-linux.db
+          python3 scripts/verify-arch-repo.py build/arch "${RELEASE_TAG#v}"
+          cp -R build/arch "$site/arch"
           cp website/index.html "$site/index.html"
           chmod -R a+rX "$site"
           mkdir -p build/release-assets
           cp "$site"/rpm/*.rpm build/release-assets/
           cp "${debs[0]}" build/release-assets/
+          cp "${arch_packages[0]}" "${arch_packages[0]}.sig" build/release-assets/
           tar -C "$site" -czf build/release-assets/musicbee-repository.tar.gz .
           python3 scripts/generate-aur.py --commit "$(git rev-parse HEAD)" --output build/aur
           tar -C build/aur -czf build/release-assets/musicbee-aur.tar.gz PKGBUILD .SRCINFO

@@ -1,12 +1,12 @@
 # MusicBee on Linux
 
-Run MusicBee on Linux with Wine. Includes most of the known tweaks to get MusicBee running smoothly.
+Run [MusicBee](https://getmusicbee.com/) on Linux with Wine. Includes most of the known tweaks to get MusicBee running smoothly.
 
-Packages are available for Fedora, Ubuntu and Debian. You can also install manually on other distributions.
+Packages are available for Fedora, Ubuntu, Debian and Arch Linux. You can also install manually on other distributions.
 
 ## Installing
 
-Download the **Portable Edition** from the [MusicBee download page](https://www.getmusicbee.com/downloads/). 
+Choose your distribution, then [finish the installation](#finish-installation).
 
 ### Fedora
 
@@ -15,8 +15,6 @@ sudo dnf config-manager addrepo \
   --from-repofile=https://fiso64.github.io/musicbee-linux/musicbee.repo
 
 sudo dnf install musicbee
-
-musicbee-manage install ~/Downloads/MusicBeePortable_*.zip
 ```
 
 ### Ubuntu
@@ -25,12 +23,9 @@ musicbee-manage install ~/Downloads/MusicBeePortable_*.zip
 sudo wget -O /etc/apt/sources.list.d/musicbee.sources \
   https://fiso64.github.io/musicbee-linux/musicbee.sources
 sudo apt update
+
 sudo apt install musicbee
-
-musicbee-manage install ~/Downloads/MusicBeePortable_*.zip
 ```
-
-Ubuntu 26.04's default Wine runs MusicBee, but Linux media controls need WineHQ Staging or a Wine build with equivalent AF_UNIX support. See [WineHQ's installation guide](https://gitlab.winehq.org/wine/wine/-/wikis/Debian-Ubuntu), then select it with `musicbee-manage config wine staging`.
 
 ### Debian 13 (amd64)
 
@@ -42,13 +37,26 @@ sudo wget -O /etc/apt/sources.list.d/musicbee.sources \
   https://fiso64.github.io/musicbee-linux/musicbee.sources
 sudo apt update
 sudo apt install musicbee wine32:i386
-
-musicbee-manage install ~/Downloads/MusicBeePortable_*.zip
 ```
 
 If you already use WineHQ, install `musicbee` without `wine32:i386`; WineHQ supplies its own 32-bit Wine components. `contrib` is still needed for Winetricks.
 
-Linux media controls may require WineHQ Staging, as described above for Ubuntu.
+### Arch Linux
+
+```bash
+curl -fsSLo /tmp/musicbee-signing-key.asc https://fiso64.github.io/musicbee-linux/RPM-GPG-KEY-musicbee
+sudo pacman-key --add /tmp/musicbee-signing-key.asc
+sudo pacman-key --lsign-key 32D14FD049B362CCB5385821860F6C0D383A2FA4
+
+sudo sh -c 'cat >> /etc/pacman.conf' <<'EOF'
+
+[musicbee-linux]
+SigLevel = Required TrustedOnly
+Server = https://fiso64.github.io/musicbee-linux/arch
+EOF
+
+sudo pacman -Syu musicbee
+```
 
 ### Manual install
 
@@ -57,10 +65,23 @@ Install Python, Wine, Winetricks, cabextract, icoutils, 7-Zip and Zenity using y
 ```bash
 git clone https://github.com/fiso64/musicbee-linux.git
 cd musicbee-linux
-python3 src/musicbee-manage.py install ~/Downloads/MusicBeePortable_*.zip
 ```
 
-The commands are installed in `~/.local/bin`; add it to your PATH if needed.
+### Finish installation
+
+Download the **Portable Edition** from the [MusicBee download page](https://www.getmusicbee.com/downloads/), then run:
+
+```bash
+musicbee-manage install ~/Downloads/MusicBeePortable_*.zip
+```
+
+For a manual install, run `python3 src/musicbee-manage.py install ~/Downloads/MusicBeePortable_*.zip` from the cloned directory instead. This installs the commands in `~/.local/bin`; add it to your PATH if needed.
+
+### Media controls
+
+Linux media controls require Wine with the AF_UNIX support used by MPRISBee. Wine Staging includes it, and some distributions' Wine builds do too.
+
+If media controls don't work, try Wine Staging. (For example, on Ubuntu/Debian, see [WineHQ's installation guide](https://gitlab.winehq.org/wine/wine/-/wikis/Debian-Ubuntu)). Select it with `musicbee-manage config wine staging`.
 
 ## Usage
 
@@ -154,6 +175,9 @@ sudo dnf remove musicbee
 
 # Ubuntu
 sudo apt remove musicbee
+
+# Arch Linux
+sudo pacman -R musicbee
 
 # Manual installs
 rm -f ~/.local/bin/musicbee ~/.local/bin/musicbee-manage ~/.local/share/applications/musicbee.desktop

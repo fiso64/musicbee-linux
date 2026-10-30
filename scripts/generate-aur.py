@@ -30,11 +30,11 @@ def generate(config: dict, version: str, commit: str) -> tuple[str, str]:
     arrays = {
         'arch': ['any' if config['arch'] == 'all' else config['arch']],
         'license': [config['license']],
-        'depends': arch['depends'],
         'makedepends': ['git'],
+        'depends': arch['depends'],
         'optdepends': arch.get('suggests', []),
-        'provides': arch.get('provides', []),
-        'conflicts': arch.get('conflicts', []),
+        'provides': [config['name']],
+        'conflicts': [config['name']],
         'source': [source],
         'sha256sums': ['SKIP'],  # Git verifies the pinned object ID.
     }

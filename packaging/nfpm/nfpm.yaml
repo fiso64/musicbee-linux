@@ -42,31 +42,24 @@ overrides:
       - wine
       - winetricks
       - cabextract
+      - icoutils
       - 7zip
       - zenity
-    suggests:
-      - 'icoutils: extract the MusicBee icon'
-    provides:
-      - musicbee
-    conflicts:
-      - musicbee
   deb:
     depends:
       - python3
       - wine | wine-staging | wine-devel | wine-stable
       - winetricks
       - cabextract
+      - icoutils
       - 7zip | p7zip-full
       - zenity
-    recommends:
-      - icoutils
   rpm:
     depends:
       - python3
       - wine
       - winetricks
       - cabextract
+      - icoutils
       - 7zip
       - zenity
-    recommends:
-      - icoutils

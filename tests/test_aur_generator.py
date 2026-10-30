@@ -28,6 +28,7 @@ class AurGeneratorTests(unittest.TestCase):
         for value in ('Test description', 'https://example.test/project', 'MIT', 'test-dependency', commit):
             self.assertIn(value, pkgbuild)
             self.assertIn(value, srcinfo)
+        self.assertLess(srcinfo.index('\tmakedepends = git'), srcinfo.index('\tdepends = python'))
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             source = root / 'src/musicbee-linux'
