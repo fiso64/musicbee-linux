@@ -2,7 +2,7 @@
 
 Run MusicBee on Linux with Wine. Includes most of the known tweaks to get MusicBee running smoothly.
 
-Packages are available for Fedora and Ubuntu. You can also install manually on other distributions.
+Packages are available for Fedora, Ubuntu and Debian. You can also install manually on other distributions.
 
 ## Installing
 
@@ -31,6 +31,24 @@ musicbee-manage install ~/Downloads/MusicBeePortable_*.zip
 ```
 
 Ubuntu 26.04's default Wine runs MusicBee, but Linux media controls need WineHQ Staging or a Wine build with equivalent AF_UNIX support. See [WineHQ's installation guide](https://gitlab.winehq.org/wine/wine/-/wikis/Debian-Ubuntu), then select it with `musicbee-manage config wine staging`.
+
+### Debian 13 (amd64)
+
+Enable `contrib` in your [Debian package sources](https://wiki.debian.org/SourcesList) for Winetricks. Then:
+
+```bash
+sudo dpkg --add-architecture i386
+sudo wget -O /etc/apt/sources.list.d/musicbee.sources \
+  https://fiso64.github.io/musicbee-linux/musicbee.sources
+sudo apt update
+sudo apt install musicbee wine32:i386
+
+musicbee-manage install ~/Downloads/MusicBeePortable_*.zip
+```
+
+If you already use WineHQ, install `musicbee` without `wine32:i386`; WineHQ supplies its own 32-bit Wine components. `contrib` is still needed for Winetricks.
+
+Linux media controls may require WineHQ Staging, as described above for Ubuntu.
 
 ### Manual install
 
