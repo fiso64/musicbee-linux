@@ -806,11 +806,31 @@ class PortableExtractionTests(unittest.TestCase):
             (app / 'MusicBee.exe').touch()
             with patch.object(mb.sys, 'argv', ['musicbee-manage', 'desktop-launch']), \
                  patch.object(mb.os, 'geteuid', return_value=1000), \
-                 patch.object(mb, 'locations', return_value={'app': app}), \
+                 patch.dict(mb.os.environ, {'MUSICBEE_DESKTOP_LOG_WORKER': '1'}), \
+                 patch.object(mb, 'locations', return_value={'app': app, 'state': app}), \
                  patch.object(mb, 'run', side_effect=mb.SetupError('Wine not found')), \
                  patch.object(mb, 'show_desktop_error') as show:
                 self.assertEqual(mb.main(), 1)
-                show.assert_called_once_with('Wine not found')
+                show.assert_called_once_with(f'Wine not found\n\nLog: {app / "desktop-launch.log"}')
+
+    def test_desktop_log_captures_and_limits_output(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            popen = subprocess.Popen
+            def noisy_process(_command, **kwargs):
+                return popen([mb.sys.executable, '-c',
+                              'import sys; sys.stdout.write("x" * (3 * 1024 * 1024))'], **kwargs)
+            with patch.object(mb.subprocess, 'Popen', side_effect=noisy_process):
+                self.assertEqual(mb.desktop_launch_with_log({'state': root}, []), 0)
+            log = (root / 'desktop-launch.log').read_bytes()
+            self.assertEqual(len(log), 2 * 1024 * 1024)
+            self.assertTrue(log.endswith(b'[Log truncated at 2 MiB]\n'))
+
+    def test_desktop_log_failure_does_not_prevent_launch(self):
+        with TemporaryDirectory() as tmp:
+            state = Path(tmp) / 'not-a-directory'
+            state.write_text('file')
+            self.assertIsNone(mb.desktop_launch_with_log({'state': state}, []))
 
     def test_desktop_error_tries_available_dialogs(self):
         with patch.object(mb.shutil, 'which', side_effect=lambda name: name if name in ('kdialog', 'zenity') else None), \

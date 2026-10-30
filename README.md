@@ -136,6 +136,8 @@ musicbee-manage config gdiplus            # describe a setting
 musicbee-manage config audio-latency on   # example: sometimes useful against stuttering
 ```
 
+For desktop launch problems, check `~/.local/share/musicbee/desktop-launch.log` (or `$XDG_DATA_HOME/musicbee/desktop-launch.log`). For more Wine diagnostics when launching from a terminal, run `WINEDEBUG=warn+all musicbee`.
+
 <details>
   <summary><b>Known problems</b></summary>
 
@@ -167,7 +169,7 @@ Installing plugins works as usual: Just follow their normal install process.
 
 ## Uninstalling
 
-Uninstalling this package leaves MusicBee and its settings in place. You can delete its wine prefix to fully remove it.
+Uninstalling this package leaves MusicBee and its settings in place. You can delete its Wine prefix at `~/.local/share/musicbee/wineprefix` to remove them.
 
 ```bash
 # Fedora

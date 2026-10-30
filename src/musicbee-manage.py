@@ -871,6 +871,42 @@ def show_desktop_error(message: str) -> None:
                 continue
 
 
+def desktop_launch_with_log(paths: dict[str, Path], files: list[str]) -> int | None:
+    """Capture desktop launch output, draining it even after the size limit."""
+    log = paths["state"] / "desktop-launch.log"
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    except OSError:
+        return None  # Logging must not prevent MusicBee from starting.
+    env = dict(os.environ, MUSICBEE_DESKTOP_LOG_WORKER="1")
+    command = [sys.executable, str(Path(__file__).resolve()), "--manage", "desktop-launch", *files]
+    with os.fdopen(fd, "wb") as output:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+        marker = b"\n[Log truncated at 2 MiB]\n"
+        remaining = 2 * 1024 * 1024 - len(marker)
+        truncated = False
+        with process.stdout as stream:
+            while chunk := os.read(stream.fileno(), 65536):
+                if remaining:
+                    data = chunk[:remaining]
+                    try:
+                        output.write(data)
+                        output.flush()
+                    except OSError:
+                        remaining = 0
+                    else:
+                        remaining -= len(data)
+                if not remaining and not truncated:
+                    try:
+                        output.write(marker)
+                        output.flush()
+                    except OSError:
+                        pass
+                    truncated = True
+        return process.wait()
+
+
 def record_environment(state: Path, prefix: Path) -> None:
     lines = [f"Recorded: {datetime.now(timezone.utc).isoformat()}"]
     env = wine_env(prefix)
@@ -1787,6 +1823,10 @@ def main() -> int:
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True)
         elif args.command == "desktop-launch":
+            if os.environ.get("MUSICBEE_DESKTOP_LOG_WORKER") != "1":
+                result = desktop_launch_with_log(paths, args.files)
+                if result is not None:
+                    return result
             if not paths["app"].joinpath("MusicBee.exe").is_file():
                 die("MusicBee is not installed. Run musicbee-manage install in a terminal.")
             run(argparse.Namespace(musicbee_args=args.files), paths)
@@ -1812,7 +1852,10 @@ def main() -> int:
     except (SetupError, OSError, subprocess.CalledProcessError, zipfile.BadZipFile, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         if manager and args.command == "desktop-launch":
-            show_desktop_error(str(exc))
+            message = str(exc)
+            if os.environ.get("MUSICBEE_DESKTOP_LOG_WORKER") == "1":
+                message += f"\n\nLog: {paths['state'] / 'desktop-launch.log'}"
+            show_desktop_error(message)
         if manager and args.command == "desktop-setup" and sys.stdin.isatty():
             input("Press Enter to close this window.")
         return 1
