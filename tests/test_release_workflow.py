@@ -95,6 +95,8 @@ esac
             self.assertTrue((stage / 'pages' / 'rpm' / 'repodata' / 'repomd.xml.asc').is_file())
             self.assertTrue((stage / 'pages' / 'apt/dists/stable/InRelease').is_file())
             self.assertTrue((stage / 'pages' / 'musicbee.sources').is_file())
+            self.assertTrue((stage / 'aur/PKGBUILD').is_file())
+            self.assertTrue((stage / 'aur/.SRCINFO').is_file())
             verifier = source / 'scripts' / 'verify-rpm-metadata.py'
             subprocess.run(['python3', str(verifier), str(stage / 'pages' / 'rpm')], check=True,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)

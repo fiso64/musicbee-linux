@@ -745,6 +745,8 @@ def install_self(binary: Path) -> None:
     if source != manager and (not manager.exists() or not source.samefile(manager)):
         shutil.copy2(source, manager)
     manager.chmod(manager.stat().st_mode | 0o755)
+    if binary.parent.resolve() not in {Path(entry or '.').resolve() for entry in os.get_exec_path()}:
+        print(f"Note: {binary.parent} is not on PATH; add it to your shell configuration to use musicbee commands.")
 
 
 def desktop_quote(value: str) -> str:

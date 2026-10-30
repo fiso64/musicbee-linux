@@ -60,7 +60,7 @@ cd musicbee-linux
 python3 src/musicbee-manage.py install ~/Downloads/MusicBeePortable_*.zip
 ```
 
-Manual installation has not yet been tested on every distribution.
+The commands are installed in `~/.local/bin`; add it to your PATH if needed.
 
 ## Usage
 

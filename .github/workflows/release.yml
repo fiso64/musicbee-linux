@@ -22,7 +22,7 @@ jobs:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - name: Install build tools
-        run: dnf -y install git python3 rpm-sign createrepo_c gnupg2 tar gzip curl gh binutils
+        run: dnf -y install git python3 python3-pyyaml rpm-sign createrepo_c gnupg2 tar gzip curl gh binutils
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
@@ -88,6 +88,8 @@ jobs:
           cp "$site"/rpm/*.rpm build/release-assets/
           cp "${debs[0]}" build/release-assets/
           tar -C "$site" -czf build/release-assets/musicbee-repository.tar.gz .
+          python3 scripts/generate-aur.py --commit "$(git rev-parse HEAD)" --output build/aur
+          tar -C build/aur -czf build/release-assets/musicbee-aur.tar.gz PKGBUILD .SRCINFO
       - name: Create draft GitHub Release
         shell: bash
         env:

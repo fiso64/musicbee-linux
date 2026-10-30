@@ -2,7 +2,9 @@
 
 `nfpm/nfpm.yaml` describes the Linux integration RPM and DEB. MusicBee itself is
 separate. The integration version lives in `src/musicbee-manage.py`; nFPM and
-`musicbee-manage --version` use that same value. AUR packaging is not implemented yet.
+`musicbee-manage --version` use that same value. Arch metadata is in the same
+configuration. AUR files are generated from it and pin the released source commit;
+AUR publication is not automated.
 The APT repository publishes `musicbee.sources` with its scoped signing key embedded.
 
 ## One-time setup
@@ -41,12 +43,18 @@ GitHub; don't commit it. GitHub supplies `GITHUB_TOKEN` automatically.
    generated notes and publish it. The publish event verifies the signed assets
    and deploys them to Pages. DNF and APT users can then upgrade normally.
 
-The draft contains the DEB, signed RPM and `musicbee-repository.tar.gz`, the exact
+The draft contains the DEB, signed RPM, `musicbee-aur.tar.gz` (PKGBUILD and
+.SRCINFO) and `musicbee-repository.tar.gz`, the exact
 repository deployed to Pages. Only the newest published release is deployable;
 older RPMs remain available from their GitHub Releases. Re-run a failed prepare
 or deployment workflow from Actions with the existing tag; if a draft already
 exists, remove it before re-running preparation. Check the deployment status
 and test DNF and APT upgrades after publishing.
+
+For AUR, extract `musicbee-aur.tar.gz`, test the PKGBUILD on Arch, then copy
+both files into the AUR checkout and push it. To generate them locally, run
+`python3 scripts/generate-aur.py --commit "$(git rev-parse HEAD)" --output build/aur`;
+the referenced commit must be available on GitHub. The generator requires PyYAML.
 
 For a local package build, run `./scripts/build-package.sh rpm` or
 `./scripts/build-package.sh deb`. The local

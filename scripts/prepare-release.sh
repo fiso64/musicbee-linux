@@ -50,6 +50,7 @@ echo "Preparing release in $stage"
 python3 -m unittest discover -s "$root/tests" -q
 "$root/scripts/build-package.sh" rpm "$stage/packages"
 "$root/scripts/build-package.sh" deb "$stage/packages"
+python3 "$root/scripts/generate-aur.py" --commit "$source_commit" --output "$stage/aur"
 shopt -s nullglob
 packages=("$stage/packages/"*.rpm)
 [[ ${#packages[@]} -eq 1 ]] || { echo 'Expected exactly one built RPM.' >&2; exit 1; }

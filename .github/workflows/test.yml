@@ -7,6 +7,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install Python YAML support
+        run: sudo apt-get update && sudo apt-get install -y python3-yaml
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
