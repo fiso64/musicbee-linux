@@ -684,10 +684,13 @@ class PortableExtractionTests(unittest.TestCase):
             for file in files:
                 file.touch()
             responses = [subprocess.CompletedProcess([], 0, str(file) + '\n', '') for file in files]
-            with patch.object(wine, 'require_commands'), \
+            with patch.object(desktop_integration, 'require_commands') as required, \
+                 patch.object(desktop_integration, 'wine_env', return_value={}), \
+                 patch.object(shutil, 'which', return_value=None), \
                  patch.object(subprocess, 'run', side_effect=responses) as convert, \
                  patch.object(subprocess, 'Popen') as launch:
                 desktop_integration.dispatch_tool('picard', [r'M:\a file.flac', r'M:\音楽.flac'], paths)
+                required.assert_called_once_with('winepath', prefix=prefix)
                 self.assertEqual(convert.call_count, 2)
                 self.assertEqual(launch.call_args.args[0], ['flatpak', 'run', 'org.musicbrainz.Picard', *map(str, files)])
                 self.assertNotIn('WINEDLLOVERRIDES', launch.call_args.kwargs['env'])
