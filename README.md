@@ -4,6 +4,8 @@
 
 Packages are available for Ubuntu, Debian, Fedora and Arch Linux. You can also install manually on other distributions.
 
+<img width="600" alt="MusicBee" src="assets/musicbee.png" />
+
 ## Installing
 
 Choose your distribution, then [finish the installation](#finish-installation).
