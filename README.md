@@ -34,7 +34,7 @@ Ubuntu 26.04's default Wine runs MusicBee, but Linux media controls need WineHQ 
 
 ### Manual install
 
-Install Python, Wine, Winetricks, cabextract, icoutils and 7-Zip using your distribution's package manager. Then:
+Install Python, Wine, Winetricks, cabextract, icoutils, 7-Zip and Zenity using your distribution's package manager. Then:
 
 ```bash
 git clone https://github.com/fiso64/musicbee-linux.git
@@ -83,6 +83,7 @@ See MusicBee's [documented options](https://getmusicbee.com/forum/index.php?topi
 This package already includes most of the known tweaks to get MusicBee running smoothly:
 
 - CJK fonts and other dependencies
+- BASS AAC decoder for AAC and M4A playback
 - MPRISBee for Linux media controls
 - Native file-manager integration
 - A workaround for the crashing file converters tab
@@ -97,7 +98,7 @@ musicbee-manage config audio-latency on   # example: sometimes useful against st
 ```
 
 <details>
-  <summary>Known problems</summary>
+  <summary><b>Known problems</b></summary>
 
 ### Dragging tabs to rearrange them fails
 Close MusicBee, then list and rearrange the saved tabs:
@@ -109,7 +110,7 @@ musicbee-manage tabs 3 1   # move tab 3 to the first position
 
 ### Some skins have broken/ugly window borders or missing min/max/close buttons
 
-Try enabling or disabling `View > Skins > Skin Window Borders`. 
+Try enabling or disabling `View > Skins > Skin Window Borders`. Unfortunately, there is no confirmed solution that works for every skin.
 
 </details>
 

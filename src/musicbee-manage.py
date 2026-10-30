@@ -57,16 +57,27 @@ def wine_selection(prefix: Path | None = None) -> str:
     return tweak_value(read_config(state), "wine")
 
 
+def winehq_bin(prefix: Path | None = None) -> Path | None:
+    selection = wine_selection(prefix)
+    if selection != "auto":
+        directory = Path(f"/opt/wine-{selection}/bin")
+        if not os.access(directory / "wine", os.X_OK):
+            die(f"WineHQ {selection} not found at {directory / 'wine'}. Install it or set wine to auto.")
+        return directory
+    path = os.environ.get("PATH", os.defpath)
+    if shutil.which("wine", path=path):
+        return None
+    candidates = [Path(f"/opt/wine-{name}/bin") for name in ("stable", "staging", "devel")
+                  if os.access(Path(f"/opt/wine-{name}/bin/wine"), os.X_OK)]
+    if len(candidates) > 1:
+        die("Multiple WineHQ versions found. Choose one with 'musicbee-manage config wine'.")
+    return candidates[0] if candidates else None
+
+
 def wine_path(prefix: Path | None = None) -> str:
     path = os.environ.get("PATH", os.defpath)
-    staging = Path("/opt/wine-staging/bin")
-    if wine_selection(prefix) == "staging":
-        if not os.access(staging / "wine", os.X_OK):
-            die("WineHQ Staging not found at /opt/wine-staging/bin/wine. Install it or set wine to auto.")
-        return str(staging) + os.pathsep + path
-    if not shutil.which("wine", path=path) and os.access(staging / "wine", os.X_OK):
-        return str(staging) + os.pathsep + path
-    return path
+    directory = winehq_bin(prefix)
+    return str(directory) + os.pathsep + path if directory else path
 
 
 def require_commands(*names: str, prefix: Path | None = None) -> None:
@@ -77,10 +88,11 @@ def require_commands(*names: str, prefix: Path | None = None) -> None:
 
 
 def wine_server(prefix: Path | None = None) -> str:
-    if wine_selection(prefix) == "staging":
-        candidate = Path("/opt/wine-staging/bin/wineserver")
+    directory = winehq_bin(prefix)
+    if directory:
+        candidate = directory / "wineserver"
         if not os.access(candidate, os.X_OK):
-            die(f"WineHQ Staging server not found: {candidate}")
+            die(f"WineHQ server not found: {candidate}")
         return str(candidate)
     configured = os.environ.get("WINESERVER")
     if configured:
@@ -101,8 +113,9 @@ def wine_env(prefix: Path, *, init: bool = False) -> dict[str, str]:
     env = dict(os.environ)
     env["WINEPREFIX"] = str(prefix)
     env["PATH"] = wine_path(prefix)
-    if wine_selection(prefix) == "staging":
-        env["WINE"] = "/opt/wine-staging/bin/wine"
+    directory = winehq_bin(prefix)
+    if directory:
+        env["WINE"] = str(directory / "wine")
         env["WINELOADER"] = env["WINE"]
         env["WINESERVER"] = wine_server(prefix)
     if not env.get("WINESERVER") and not shutil.which("wineserver", path=env["PATH"]):
@@ -153,9 +166,9 @@ def write_config(state: Path, config: dict) -> None:
 
 
 TWEAKS = {
-    "wine": ("auto", ("auto", "staging"),
-        "Choose Wine for MusicBee. Auto uses Wine on PATH, falling back to WineHQ Staging; "
-        "staging selects WineHQ Staging in /opt/wine-staging. Switching Wine can update the prefix."),
+    "wine": ("auto", ("auto", "stable", "staging", "devel"),
+        "Choose Wine for MusicBee. Auto uses Wine on PATH, or a single WineHQ installation in /opt. "
+        "Other values select that WineHQ branch. Switching Wine can update the prefix."),
     "audio-latency": ("off", ("on", "off"),
         "Set PulseAudio-compatible latency to 60 ms to help with stuttering. "
         "May increase audio delay; off leaves the environment unchanged."),
@@ -235,10 +248,11 @@ def configure(args: argparse.Namespace, paths: dict[str, Path]) -> None:
     value = args.value.casefold()
     if value not in values:
         die(f"Invalid value for {name}: {args.value!r}. Choose: {', '.join(values)}.")
-    if name == "wine" and value == "staging":
+    if name == "wine" and value != "auto":
         for executable in ("wine", "wineboot", "winepath", "wineserver"):
-            if not os.access(Path("/opt/wine-staging/bin") / executable, os.X_OK):
-                die(f"WineHQ Staging is missing {executable} in /opt/wine-staging/bin.")
+            directory = Path(f"/opt/wine-{value}/bin")
+            if not os.access(directory / executable, os.X_OK):
+                die(f"WineHQ {value} is missing {executable} in {directory}.")
     if name in ("allfonts", "font-smoothing") and (paths["prefix"] / ".musicbee-bootstrap-complete").is_file():
         apply_font_tweak(name, value, paths["prefix"])
     if name == "windows-version" and (paths["prefix"] / ".musicbee-bootstrap-complete").is_file():
@@ -811,7 +825,8 @@ MUSIC_MIME_TYPES = (
 
 def make_launcher(binary: Path, desktop: Path, icon: Path | None = None, *, setup_needed: bool = False) -> None:
     desktop.parent.mkdir(parents=True, exist_ok=True)
-    command = f"{desktop_quote(str(binary.with_name('musicbee-manage')))} desktop-setup" if setup_needed else desktop_quote(str(binary))
+    action = "desktop-setup" if setup_needed else "desktop-launch"
+    command = f"{desktop_quote(str(binary.with_name('musicbee-manage')))} {action}"
     desktop.write_text(
         "[Desktop Entry]\n"
         "Type=Application\n"
@@ -837,6 +852,21 @@ def make_launcher(binary: Path, desktop: Path, icon: Path | None = None, *, setu
             print(f"Warning: could not refresh desktop file associations: {exc}", file=sys.stderr)
     else:
         print("Note: install desktop-file-utils to refresh desktop file associations.")
+
+
+def show_desktop_error(message: str) -> None:
+    """Show a launch error even when the desktop discards standard error."""
+    for name, args in (
+        ("kdialog", ["--title", "MusicBee", "--error", message]),
+        ("zenity", ["--error", "--title=MusicBee", "--no-markup", f"--text={message}"]),
+        ("notify-send", ["--urgency=critical", "MusicBee", message]),
+    ):
+        if shutil.which(name):
+            try:
+                if subprocess.run([name, *args], check=False).returncode == 0:
+                    return
+            except OSError:
+                continue
 
 
 def record_environment(state: Path, prefix: Path) -> None:
@@ -939,6 +969,72 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+AAC_URL = "https://www.un4seen.com/files/z/2/bass_aac24.zip"
+
+
+def install_aac_decoder(paths: dict[str, Path]) -> None:
+    import urllib.request
+
+    app = paths["app"]
+    if not (app / "MusicBee.exe").is_file():
+        die("MusicBee is not installed. Run musicbee-manage install first.")
+    target = matching_child(app, "bass_aac.dll")
+    if target.is_symlink() or (target.exists() and not target.is_file()):
+        die(f"Refusing unsafe AAC decoder path: {target}")
+    if target.is_file():
+        print("AAC decoder already present; keeping it.")
+        return
+    print("Downloading the BASS AAC decoder from Un4seen ...", flush=True)
+    request = urllib.request.Request(AAC_URL, headers={"User-Agent": "musicbee-linux"})
+    with urllib.request.urlopen(request, timeout=45) as remote:
+        data = remote.read(16 * 1024 * 1024 + 1)
+    if len(data) > 16 * 1024 * 1024:
+        die("AAC decoder archive is unexpectedly large.")
+    import io
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        entries = [entry for entry in archive.infolist() if entry.filename.casefold() == "bass_aac.dll"]
+        if len(entries) != 1 or entries[0].is_dir() or entries[0].file_size > 8 * 1024 * 1024 or \
+           stat.S_ISLNK(entries[0].external_attr >> 16):
+            die("AAC archive must contain one 32-bit bass_aac.dll at its root.")
+        dll = archive.read(entries[0])
+    if len(dll) < 64 or dll[:2] != b"MZ":
+        die("AAC decoder is not a Windows DLL.")
+    pe = int.from_bytes(dll[60:64], "little")
+    if pe > len(dll) - 24 or dll[pe:pe + 4] != b"PE\0\0" or \
+       int.from_bytes(dll[pe + 4:pe + 6], "little") != 0x14c or \
+       not int.from_bytes(dll[pe + 22:pe + 24], "little") & 0x2000:
+        die("AAC decoder is not a 32-bit Windows DLL.")
+    fd, temporary = tempfile.mkstemp(prefix=".bass-aac-", dir=app)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(dll)
+        try:
+            os.link(temporary, target)
+        except FileExistsError:
+            die(f"AAC decoder appeared during installation; leaving it untouched: {target}")
+    finally:
+        os.unlink(temporary)
+    print("AAC decoder installed.")
+
+
+def ensure_aac_decoder(paths: dict[str, Path]) -> None:
+    try:
+        install_aac_decoder(paths)
+    except Exception as exc:
+        print(f"Warning: could not install the AAC decoder: {exc}. "
+              "Retry with: musicbee-manage aac", file=sys.stderr)
+
+
+def repair_aac_decoder(paths: dict[str, Path]) -> None:
+    require_ready(paths["prefix"])
+    with (paths["prefix"] / ".musicbee.launch.lock").open("a+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            die("Close MusicBee before installing the AAC decoder.")
+        install_aac_decoder(paths)
+
+
 def install(args: argparse.Namespace, paths: dict[str, Path]) -> None:
     source = Path(args.installer).expanduser().resolve(strict=True)
     if not source.is_file():
@@ -970,6 +1066,7 @@ def install(args: argparse.Namespace, paths: dict[str, Path]) -> None:
         except BlockingIOError:
             die("Close MusicBee before updating it.")
         backup_path = unpack_portable(source, paths["app"], update=True, keep_backup=keep_backup)
+        ensure_aac_decoder(paths)
         write_json_atomic(paths["state"] / "portable-source.json", {"sha256": digest, "archive": source.name})
     regenerate_launcher(paths)
     if backup_path:
@@ -1494,7 +1591,7 @@ def unpack_portable(archive: Path, app: Path, *, update: bool = False, keep_back
                         die(f"Refusing to overwrite an unsafe update entry: {dst}")
                     # Update program binaries; preserve existing settings, plugins and assets.
                     replace = (len(rel.parts) == 1 and source.suffix.casefold() in (".exe", ".dll")
-                               and rel.name.casefold() != "explorer.exe")
+                               and rel.name.casefold() not in ("explorer.exe", "bass_aac.dll"))
                     if not dst.exists() or replace:
                         shutil.copy2(source, dst)
                 if keep_backup:
@@ -1549,6 +1646,7 @@ def first_launch(args: argparse.Namespace, paths: dict[str, Path]) -> None:
             if not (paths["prefix"] / ".musicbee-bootstrap-complete").is_file() or not (state / "config.json").is_file():
                 initialize_prefix(paths)
             unpack_portable(archive, paths["app"])
+            ensure_aac_decoder(paths)
             regenerate_launcher(paths)
             write_json_atomic(state / "portable-source.json", {"sha256": sha256(archive), "archive": archive.name})
             ensure_media_controls(paths)
@@ -1568,11 +1666,13 @@ def create_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--version", action="version", version=f"musicbee-manage {__version__}")
-    sub = parser.add_subparsers(dest="command", metavar="{install,init,repair-dependencies,music-dir,config,tabs,tools,backup,launcher,media-controls,status}")
+    sub = parser.add_subparsers(dest="command", metavar="{install,init,repair-dependencies,aac,music-dir,config,tabs,tools,backup,launcher,media-controls,status}")
     desktop_setup = sub.add_parser("desktop-setup")
     desktop_setup.add_argument("files", nargs=argparse.REMAINDER)
     explorer = sub.add_parser("explorer-dispatch")
     explorer.add_argument("arguments", nargs=argparse.REMAINDER)
+    desktop_launch = sub.add_parser("desktop-launch")
+    desktop_launch.add_argument("files", nargs=argparse.REMAINDER)
     dispatch = sub.add_parser("tools-dispatch")
     dispatch.add_argument("name")
     dispatch.add_argument("files", nargs="+")
@@ -1588,6 +1688,7 @@ def create_parser() -> argparse.ArgumentParser:
     ini.add_argument("--accept-license", action="store_true", help="Explicitly accept MusicBee EULA for unattended install")
     ini.add_argument("--no-launch", action="store_true", help="Do not start MusicBee after installing")
     sub.add_parser("repair-dependencies", help="Re-run Wine dependency setup for an existing installation")
+    sub.add_parser("aac", help="Install the AAC decoder if it is missing")
     music = sub.add_parser("music-dir", help="Show or configure a Wine link to your music directory")
     music.add_argument("directory", nargs="?", help="Linux music directory")
     music.add_argument("--wine-music-path", metavar="WIN_PATH", help=r"Windows path (default: previous path or C:\Users\<user>\Music)")
@@ -1669,6 +1770,8 @@ def main() -> int:
             run(argparse.Namespace(musicbee_args=arguments), paths)
         elif args.command == "repair-dependencies":
             repair_dependencies(paths)
+        elif args.command == "aac":
+            repair_aac_decoder(paths)
         elif args.command == "music-dir":
             configure_music_dir(args, paths)
         elif args.command == "install":
@@ -1678,9 +1781,13 @@ def main() -> int:
         elif args.command == "desktop-setup":
             first_launch(argparse.Namespace(archive=None,
                                             accept_license=False, no_launch=True), paths)
-            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--launch", *args.files],
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--manage", "desktop-launch", *args.files],
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True)
+        elif args.command == "desktop-launch":
+            if not paths["app"].joinpath("MusicBee.exe").is_file():
+                die("MusicBee is not installed. Run musicbee-manage install in a terminal.")
+            run(argparse.Namespace(musicbee_args=args.files), paths)
         elif args.command == "backup":
             backup(args, paths)
         elif args.command == "config":
@@ -1702,6 +1809,8 @@ def main() -> int:
         return 0
     except (SetupError, OSError, subprocess.CalledProcessError, zipfile.BadZipFile, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
+        if manager and args.command == "desktop-launch":
+            show_desktop_error(str(exc))
         if manager and args.command == "desktop-setup" and sys.stdin.isatty():
             input("Press Enter to close this window.")
         return 1

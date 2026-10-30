@@ -43,6 +43,7 @@ overrides:
       - winetricks
       - cabextract
       - 7zip | p7zip-full
+      - zenity
     recommends:
       - icoutils
   rpm:
@@ -52,5 +53,6 @@ overrides:
       - winetricks
       - cabextract
       - 7zip
+      - zenity
     recommends:
       - icoutils

@@ -19,6 +19,65 @@ loader.exec_module(mb)
 
 
 class PortableExtractionTests(unittest.TestCase):
+    def setUp(self):
+        patcher = patch.object(mb, 'ensure_aac_decoder')
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_aac_install_extracts_32bit_dll_and_preserves_existing(self):
+        import urllib.request
+        with TemporaryDirectory() as tmp:
+            app = Path(tmp)
+            (app / 'MusicBee.exe').touch()
+            dll = bytearray(128)
+            dll[:2] = b'MZ'
+            dll[60:64] = (64).to_bytes(4, 'little')
+            dll[64:68] = b'PE\0\0'
+            dll[68:70] = (0x14c).to_bytes(2, 'little')
+            dll[86:88] = (0x2000).to_bytes(2, 'little')
+            data = io.BytesIO()
+            with zipfile.ZipFile(data, 'w') as archive:
+                archive.writestr('bass_aac.dll', dll)
+                archive.writestr('x64/bass_aac.dll', b'wrong architecture')
+            with patch.object(urllib.request, 'urlopen', return_value=io.BytesIO(data.getvalue())) as download:
+                mb.install_aac_decoder({'app': app})
+                self.assertEqual((app / 'bass_aac.dll').read_bytes(), bytes(dll))
+                mb.install_aac_decoder({'app': app})
+                self.assertEqual(download.call_count, 1)
+
+    def test_aac_rejects_wrong_architecture_without_creating_file(self):
+        import urllib.request
+        with TemporaryDirectory() as tmp:
+            app = Path(tmp)
+            (app / 'MusicBee.exe').touch()
+            dll = bytearray(128)
+            dll[:2] = b'MZ'
+            dll[60:64] = (64).to_bytes(4, 'little')
+            dll[64:68] = b'PE\0\0'
+            dll[68:70] = (0x8664).to_bytes(2, 'little')
+            dll[86:88] = (0x2000).to_bytes(2, 'little')
+            data = io.BytesIO()
+            with zipfile.ZipFile(data, 'w') as archive:
+                archive.writestr('bass_aac.dll', dll)
+            with patch.object(urllib.request, 'urlopen', return_value=io.BytesIO(data.getvalue())):
+                with self.assertRaisesRegex(mb.SetupError, '32-bit'):
+                    mb.install_aac_decoder({'app': app})
+            self.assertFalse((app / 'bass_aac.dll').exists())
+
+    def test_update_preserves_existing_aac_decoder(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            app = root / 'MusicBee'
+            app.mkdir()
+            (app / 'MusicBee.exe').write_bytes(b'old')
+            (app / 'bass_aac.dll').write_bytes(b'existing decoder')
+            archive = root / 'update.zip'
+            with zipfile.ZipFile(archive, 'w') as z:
+                z.writestr('MusicBee.exe', b'new')
+                z.writestr('bass_aac.dll', b'incoming decoder')
+            mb.unpack_portable(archive, app, update=True, keep_backup=False)
+            self.assertEqual((app / 'bass_aac.dll').read_bytes(), b'existing decoder')
+
     def test_ubuntu_wineserver_is_used_for_wine_and_winetricks(self):
         server = '/usr/lib/x86_64-linux-gnu/wine/wineserver'
         with patch.dict(mb.os.environ, {}, clear=True), \
@@ -34,11 +93,32 @@ class PortableExtractionTests(unittest.TestCase):
         with patch.dict(mb.os.environ, {'PATH': '/usr/bin'}, clear=True), \
              patch.object(mb.shutil, 'which', side_effect=lambda name, path=None:
                           f'/opt/wine-staging/bin/{name}' if path.startswith('/opt/wine-staging/bin:') else None), \
-             patch.object(mb.os, 'access', return_value=True):
+             patch.object(mb.os, 'access', side_effect=lambda path, mode:
+                          str(path).startswith('/opt/wine-staging/bin/')):
             env = mb.wine_env(Path('/tmp/prefix'))
             self.assertTrue(env['PATH'].startswith('/opt/wine-staging/bin:'))
             self.assertEqual(mb.wine_server(), '/opt/wine-staging/bin/wineserver')
             mb.require_commands('wine', 'winepath', 'wineboot', 'wineserver')
+
+    def test_winehq_stable_fallback_uses_matching_server(self):
+        with patch.dict(mb.os.environ, {'PATH': '/usr/bin', 'WINESERVER': '/wrong/server'}, clear=True), \
+             patch.object(mb, 'wine_selection', return_value='auto'), \
+             patch.object(mb.shutil, 'which', return_value=None), \
+             patch.object(mb.os, 'access', side_effect=lambda path, mode:
+                          str(path).startswith('/opt/wine-stable/bin/')):
+            env = mb.wine_env(Path('/tmp/prefix'))
+            self.assertEqual(env['WINE'], '/opt/wine-stable/bin/wine')
+            self.assertEqual(env['WINESERVER'], '/opt/wine-stable/bin/wineserver')
+            self.assertTrue(env['PATH'].startswith('/opt/wine-stable/bin:'))
+
+    def test_multiple_winehq_branches_require_selection(self):
+        with patch.dict(mb.os.environ, {'PATH': '/usr/bin'}, clear=True), \
+             patch.object(mb, 'wine_selection', return_value='auto'), \
+             patch.object(mb.shutil, 'which', return_value=None), \
+             patch.object(mb.os, 'access', side_effect=lambda path, mode:
+                          str(path).startswith(('/opt/wine-stable/', '/opt/wine-staging/'))):
+            with self.assertRaisesRegex(mb.SetupError, 'Multiple WineHQ versions'):
+                mb.wine_path()
 
     def test_existing_wine_on_path_takes_precedence_over_staging(self):
         with patch.dict(mb.os.environ, {'PATH': '/custom/bin:/usr/bin'}, clear=True), \
@@ -687,13 +767,14 @@ class PortableExtractionTests(unittest.TestCase):
                  patch.object(mb, 'ensure_media_controls') as media_mock:
                 mb.first_launch(args, paths)
                 media_mock.assert_called_once_with(paths)
+                mb.ensure_aac_decoder.assert_called_once_with(paths)
                 windows_version.assert_called_once_with('8.1', prefix)
             self.assertTrue((paths['app'] / 'MusicBee.exe').is_file())
             self.assertEqual(json.loads((state/'config.json').read_text())['tweaks']['gdiplus'], 'wine')
             self.assertFalse((prefix/'drive_c'/'Users').exists())
             self.assertFalse((prefix/'dosdevices'/'m:').exists())
             self.assertTrue(paths['desktop'].is_file())
-            self.assertIn('musicbee" %f\nTerminal=false\n', paths['desktop'].read_text())
+            self.assertIn('musicbee-manage" desktop-launch %f\nTerminal=false\n', paths['desktop'].read_text())
             self.assertEqual(len(json.loads((state/'portable-source.json').read_text())['sha256']), 64)
 
     def test_desktop_launcher_shows_setup_in_terminal_until_installed(self):
@@ -703,7 +784,7 @@ class PortableExtractionTests(unittest.TestCase):
             mb.make_launcher(root / 'musicbee', desktop, setup_needed=True)
             self.assertIn(' desktop-setup %f\nTerminal=true\n', desktop.read_text())
             mb.make_launcher(root / 'musicbee', desktop)
-            self.assertIn('musicbee" %f\nTerminal=false\n', desktop.read_text())
+            self.assertIn('musicbee-manage" desktop-launch %f\nTerminal=false\n', desktop.read_text())
             self.assertIn('audio/x-flac;', desktop.read_text())
             self.assertIn('audio/x-mpegurl;', desktop.read_text())
 
@@ -716,8 +797,28 @@ class PortableExtractionTests(unittest.TestCase):
              patch.object(mb.subprocess, 'Popen') as launch_mock:
             self.assertEqual(mb.main(), 0)
             self.assertTrue(setup_mock.call_args.args[0].no_launch)
-            self.assertEqual(launch_mock.call_args.args[0][-2:], ['--launch', '/music/song.flac'])
+            self.assertEqual(launch_mock.call_args.args[0][-3:], ['--manage', 'desktop-launch', '/music/song.flac'])
             self.assertTrue(launch_mock.call_args.kwargs['start_new_session'])
+
+    def test_desktop_launch_displays_errors(self):
+        with TemporaryDirectory() as tmp:
+            app = Path(tmp)
+            (app / 'MusicBee.exe').touch()
+            with patch.object(mb.sys, 'argv', ['musicbee-manage', 'desktop-launch']), \
+                 patch.object(mb.os, 'geteuid', return_value=1000), \
+                 patch.object(mb, 'locations', return_value={'app': app}), \
+                 patch.object(mb, 'run', side_effect=mb.SetupError('Wine not found')), \
+                 patch.object(mb, 'show_desktop_error') as show:
+                self.assertEqual(mb.main(), 1)
+                show.assert_called_once_with('Wine not found')
+
+    def test_desktop_error_tries_available_dialogs(self):
+        with patch.object(mb.shutil, 'which', side_effect=lambda name: name if name in ('kdialog', 'zenity') else None), \
+             patch.object(mb.subprocess, 'run', side_effect=[subprocess.CompletedProcess([], 1),
+                                                               subprocess.CompletedProcess([], 0)]) as calls:
+            mb.show_desktop_error('Missing Wine')
+            self.assertEqual(calls.call_count, 2)
+            self.assertEqual(calls.call_args.args[0][-1], '--text=Missing Wine')
 
     def test_run_uses_no_install_if_present(self):
         with TemporaryDirectory() as tmp:
