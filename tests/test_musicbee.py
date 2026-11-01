@@ -419,10 +419,11 @@ class PortableExtractionTests(unittest.TestCase):
             self.assertEqual((app / 'library.db').read_bytes(), b'user library')
             self.assertEqual((backup / 'MusicBee.exe').read_bytes(), b'old executable')
 
-    def test_missing_archive_instructs_user_to_download(self):
-        with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaisesRegex(settings.SetupError, 'musicbee-manage install'):
-                installation.packaged_archive({})
+    def test_missing_archive_downloads_latest(self):
+        with TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=True), \
+             patch.object(installation.downloads, 'download', return_value=(Path(tmp) / 'musicbee.zip', '3.7.0')) as download:
+            self.assertEqual(installation.packaged_archive({'state': Path(tmp)}), Path(tmp) / 'musicbee.zip')
+            download.assert_called_once_with(Path(tmp))
 
     def test_nonportable_zip_rejected_before_first_setup(self):
         with TemporaryDirectory() as tmp:
@@ -478,13 +479,13 @@ class PortableExtractionTests(unittest.TestCase):
 
     def test_install_backup_flags(self):
         parser = cli.create_parser()
-        self.assertIsNone(parser.parse_args(['install', 'file.zip']).keep_backup)
+        self.assertTrue(parser.parse_args(['install', 'file.zip']).keep_backup)
         self.assertTrue(parser.parse_args(['install', 'file.zip', '--backup']).keep_backup)
         self.assertFalse(parser.parse_args(['install', '--no-backup', 'file.zip']).keep_backup)
 
-    def test_update_backup_prompt_defaults_yes_and_accepts_no(self):
-        for answer, expected_backups in [('', 1), ('n', 0)]:
-            with self.subTest(answer=answer), TemporaryDirectory() as tmp:
+    def test_updates_keep_backup_by_default_and_can_skip_it(self):
+        for keep_backup, expected_backups in [(None, 1), (False, 0)]:
+            with self.subTest(keep_backup=keep_backup), TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 archive = root / 'update.zip'
                 with zipfile.ZipFile(archive, 'w') as z:
@@ -497,10 +498,11 @@ class PortableExtractionTests(unittest.TestCase):
                 state = root / 'state'
                 state.mkdir()
                 with patch.object(sys.stdin, 'isatty', return_value=True), \
-                     patch('builtins.input', return_value=answer), \
+                     patch('builtins.input') as prompt, \
                      patch.object(installation, 'regenerate_launcher'):
-                    installation.install(argparse.Namespace(installer=str(archive), keep_backup=None),
+                    installation.install(argparse.Namespace(installer=str(archive), keep_backup=keep_backup, yes=True),
                                {'state': state, 'prefix': prefix, 'app': app})
+                    prompt.assert_not_called()
                 self.assertEqual(len(list(app.parent.glob('MusicBee.backup-*'))), expected_backups)
 
     def test_install_command_updates_existing_installation(self):
@@ -517,7 +519,7 @@ class PortableExtractionTests(unittest.TestCase):
             paths = {'state': root / 'state', 'prefix': prefix, 'app': app}
             paths['state'].mkdir()
             with patch.object(installation, 'regenerate_launcher'):
-                installation.install(argparse.Namespace(installer=str(archive)), paths)
+                installation.install(argparse.Namespace(installer=str(archive), yes=True), paths)
             self.assertEqual((app / 'MusicBee.exe').read_bytes(), b'updated')
             self.assertEqual(json.loads((paths['state'] / 'portable-source.json').read_text())['sha256'], utils.sha256(archive))
             self.assertEqual(len(list(app.parent.glob('MusicBee.backup-*'))), 1)

@@ -34,8 +34,8 @@ GitHub; don't commit it. GitHub supplies `GITHUB_TOKEN` automatically.
 2. Create and push the matching tag, for example:
 
    ```bash
-   git tag v0.3.0
-   git push origin v0.3.0
+   git tag v0.6.0
+   git push origin v0.6.0
    ```
 
 3. Actions tests the tagged commit, checks the version, builds the packages,
@@ -60,3 +60,12 @@ For a local package build, run `./scripts/build-package.sh rpm`,
 `./scripts/build-package.sh deb` or `./scripts/build-package.sh archlinux`. The local
 `prepare-rpm-repo.sh` and `prepare-release.sh` scripts remain available as a
 Fedora/APT fallback; they do not prepare the Arch repository. Update `website/index.html` to change the Pages landing page.
+
+## MusicBee Portable versions
+
+MusicBee Portable archives are hosted separately in the `fiso64/musicbee-portable`
+repository, with permission. To add a version, upload the archive as a GitHub
+release asset under a tag matching its full executable version. The installer
+reads GitHub's release list and asset checksums; no Linux integration release or
+separate version catalog is needed. Keep existing releases available and verify
+the archive and its MusicBee version before publishing.

@@ -15,13 +15,14 @@ import tempfile
 import zipfile
 
 from .archive import unpack_portable, validate_portable_archive
+from . import downloads
 from .paths import matching_child
 from .settings import die, read_config, tweak_value, write_config, write_json_atomic
 from .desktop import extract_musicbee_icon, install_self, make_launcher, regenerate_launcher
 from .media_controls import ensure_media_controls
 from .utils import call, maintenance_lock, require_ready, sha256
-from .wine import (apply_font_tweak, apply_windows_version, require_commands, run_musicbee,
-                   wine_env, wine_server)
+from .wine import (apply_font_tweak, apply_windows_version, musicbee_version,
+                   require_commands, run_musicbee, wine_env, wine_server)
 
 
 def record_environment(state: Path, prefix: Path) -> None:
@@ -184,8 +185,7 @@ def packaged_archive(paths: dict[str, Path], override: str | None = None) -> Pat
     elif os.environ.get("MUSICBEE_ARCHIVE_OVERRIDE"):
         archive = Path(os.environ["MUSICBEE_ARCHIVE_OVERRIDE"]).expanduser()
     else:
-        die("Download the MusicBee Portable ZIP from https://www.getmusicbee.com/downloads/\n"
-            "Then run: musicbee-manage install /path/to/MusicBeePortable.zip")
+        return downloads.download(paths["state"])[0]
     if not archive.is_file():
         die(f"MusicBee archive not found: {archive}. Download it from https://www.getmusicbee.com/downloads/.")
     return archive
@@ -217,9 +217,47 @@ def first_launch(args: argparse.Namespace, paths: dict[str, Path]) -> None:
 
 
 def install(args: argparse.Namespace, paths: dict[str, Path]) -> None:
-    source = Path(args.installer).expanduser().resolve(strict=True)
-    if not source.is_file():
-        die(f"Archive is not a file: {source}")
+    archive = getattr(args, "archive", None)
+    version = getattr(args, "install_version", None)
+    update = getattr(args, "update", False)
+    if args.installer and (archive or version or update):
+        die("Choose a local archive, --version or --update, not both.")
+    local = archive or args.installer
+    index = None
+    action = "Install"
+    if local:
+        source = Path(local).expanduser().resolve(strict=True)
+        if not source.is_file():
+            die(f"Archive is not a file: {source}")
+        validate_portable_archive(source)
+        label = source.name
+    else:
+        index = downloads.catalog()
+        selected = downloads.select_version(index, version or "latest")
+        if (paths["app"] / "MusicBee.exe").is_file() and (update or not getattr(args, "yes", False)):
+            current = musicbee_version(paths["app"])
+            if update and not all(part.isdigit() for part in current.split(".")):
+                die("Could not determine the installed MusicBee version; use 'musicbee-manage install' to reinstall.")
+            if update and tuple(map(int, current.split("."))) >= tuple(map(int, selected.split("."))):
+                print(f"MusicBee {current} is already up to date (latest: {selected}).")
+                return
+            if current == selected:
+                action = "Reinstall"
+        label = f"MusicBee Portable {selected}"
+    if not getattr(args, "yes", False):
+        while True:
+            try:
+                answer = input(f"{action} {label}? [Y/n] ").strip().casefold()
+            except EOFError:
+                die("Installation needs confirmation; use -y to continue without a prompt.")
+            if answer in ("", "y", "yes"):
+                break
+            if answer in ("n", "no"):
+                print("Installation cancelled.")
+                return
+            print("Please enter y or n.")
+    if not local:
+        source, _ = downloads.download(paths["state"], selected, index=index)
     if not (paths["app"] / "MusicBee.exe").is_file():
         first_launch(argparse.Namespace(archive=str(source),
                                         accept_license=False, no_launch=True), paths)
@@ -228,18 +266,7 @@ def install(args: argparse.Namespace, paths: dict[str, Path]) -> None:
     validate_portable_archive(source)
     require_ready(paths["prefix"])
     digest = sha256(source)
-    keep_backup = getattr(args, "keep_backup", None)
-    if keep_backup is None:
-        if sys.stdin.isatty():
-            while True:
-                answer = input("Keep a backup of the current MusicBee installation? [Y/n] ").strip().casefold()
-                if answer in ("", "y", "yes", "n", "no"):
-                    keep_backup = answer in ("", "y", "yes")
-                    break
-                print("Please enter y or n.")
-        else:
-            keep_backup = True
-            print("Keeping a backup (use --no-backup to skip it).")
+    keep_backup = getattr(args, "keep_backup", True) is not False
     with maintenance_lock(paths["prefix"], "Close MusicBee before updating it."):
         backup_path = unpack_portable(source, paths["app"], update=True, keep_backup=keep_backup)
         ensure_aac_decoder(paths)

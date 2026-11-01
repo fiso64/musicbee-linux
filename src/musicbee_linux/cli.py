@@ -18,11 +18,11 @@ def create_parser() -> argparse.ArgumentParser:
         description="Manage MusicBee on Linux using Wine.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Download MusicBee Portable, then run: musicbee-manage install /path/to/MusicBeePortable.zip\n"
+            "Install MusicBee Portable with: musicbee-manage install\n"
         ),
     )
     parser.add_argument("--version", action="store_true", help="Show version and system information")
-    sub = parser.add_subparsers(dest="command", metavar="{install,init,repair-dependencies,aac,music-dir,config,tabs,tools,backup,launcher,media-controls,status}")
+    sub = parser.add_subparsers(dest="command", metavar="{install,versions,init,repair-dependencies,aac,music-dir,config,tabs,tools,backup,launcher,media-controls,status}")
     desktop_setup = sub.add_parser("desktop-setup")
     desktop_setup.add_argument("files", nargs=argparse.REMAINDER)
     explorer = sub.add_parser("explorer-dispatch")
@@ -32,14 +32,21 @@ def create_parser() -> argparse.ArgumentParser:
     dispatch = sub.add_parser("tools-dispatch")
     dispatch.add_argument("name")
     dispatch.add_argument("files", nargs="+")
-    ins = sub.add_parser("install", help="Install or update MusicBee from a downloaded portable archive")
-    ins.add_argument("installer", help="Path to the MusicBee Portable ZIP or EXE")
+    ins = sub.add_parser("install", help="Install or update MusicBee Portable")
+    ins.add_argument("installer", nargs="?", help="Path to a local MusicBee Portable ZIP or EXE")
+    source = ins.add_mutually_exclusive_group()
+    source.add_argument("--archive", help="Use a local MusicBee Portable ZIP or EXE")
+    source.add_argument("--version", dest="install_version", metavar="VERSION",
+                        help="MusicBee version to install (default: latest)")
+    source.add_argument("--update", action="store_true", help="Install the latest version only if needed")
+    ins.add_argument("-y", "--yes", action="store_true", help="Skip the install confirmation")
     backup_options = ins.add_mutually_exclusive_group()
-    backup_options.add_argument("--backup", dest="keep_backup", action="store_true", default=None,
-                                help="Keep a backup during updates without prompting")
+    backup_options.add_argument("--backup", dest="keep_backup", action="store_true", default=True,
+                                help="Keep a backup during updates (default)")
     backup_options.add_argument("--no-backup", dest="keep_backup", action="store_false",
-                                help="Do not keep an update backup; skip the prompt")
-    ini = sub.add_parser("init", help="Set up Wine and install MusicBee from a downloaded archive")
+                                help="Do not keep an update backup")
+    sub.add_parser("versions", help="List available MusicBee Portable versions")
+    ini = sub.add_parser("init", help="Set up Wine and install MusicBee")
     ini.add_argument("--archive", help="Downloaded MusicBee Portable ZIP or EXE")
     ini.add_argument("--accept-license", action="store_true", help="Explicitly accept MusicBee EULA for unattended install")
     ini.add_argument("--no-launch", action="store_true", help="Do not start MusicBee after installing")
@@ -101,6 +108,7 @@ For installation and configuration, run musicbee-manage --help.
 def manage_command(args: argparse.Namespace, paths: dict[str, Path]) -> int:
     """Dispatch management commands, including the private desktop bridges."""
     from . import install as installation
+    from . import downloads
 
     with_args = {
         "music-dir": utils.configure_music_dir, "install": installation.install, "init": installation.first_launch,
@@ -115,6 +123,8 @@ def manage_command(args: argparse.Namespace, paths: dict[str, Path]) -> int:
         with_args[args.command](args, paths)
     elif args.command in paths_only:
         paths_only[args.command](paths)
+    elif args.command == "versions":
+        downloads.list_versions(paths["app"])
     elif args.command == "desktop-setup":
         installation.first_launch(argparse.Namespace(archive=None, accept_license=False, no_launch=True), paths)
         subprocess.Popen([sys.executable, str(utils.entrypoint()), "--manage", "desktop-launch", *args.files],

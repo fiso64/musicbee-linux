@@ -1,6 +1,6 @@
 # MusicBee on Linux
 
-[MusicBee](https://getmusicbee.com/) is one of the best music players and library managers out there. This project installs and runs it on Linux with Wine, including most of the known tweaks to integrate and get MusicBee running smoothly.
+[MusicBee](https://getmusicbee.com/) is one of the best music players and library managers out there. This project installs and runs it on Linux with Wine, including most of the known tweaks to integrate and get MusicBee running smoothly. Note that MusicBee is not officially supported on Linux.
 
 Packages are available for Ubuntu, Debian, Fedora and Arch Linux. You can also install manually on other distributions.
 
@@ -8,7 +8,7 @@ Packages are available for Ubuntu, Debian, Fedora and Arch Linux. You can also i
 
 ## Installing
 
-Choose your distribution, then [finish the installation](#finish-installation).
+Choose your distribution below. The installer downloads MusicBee Portable from our [mirror](https://github.com/fiso64/musicbee-portable).
 
 ### Fedora
 
@@ -17,6 +17,8 @@ sudo dnf config-manager addrepo \
   --from-repofile=https://fiso64.github.io/musicbee-linux/musicbee.repo
 
 sudo dnf install musicbee
+
+musicbee-manage install
 ```
 
 ### Ubuntu
@@ -27,6 +29,8 @@ sudo wget -O /etc/apt/sources.list.d/musicbee.sources \
 sudo apt update
 
 sudo apt install musicbee
+
+musicbee-manage install
 ```
 
 ### Debian 13 (amd64)
@@ -39,9 +43,11 @@ sudo wget -O /etc/apt/sources.list.d/musicbee.sources \
   https://fiso64.github.io/musicbee-linux/musicbee.sources
 sudo apt update
 sudo apt install musicbee wine32:i386
+
+musicbee-manage install
 ```
 
-If you already use WineHQ, install `musicbee` without `wine32:i386`; WineHQ supplies its own 32-bit Wine components. `contrib` is still needed for Winetricks.
+If you already use WineHQ, install `musicbee` without `wine32:i386`; WineHQ supplies its own 32-bit Wine components.
 
 ### Arch Linux
 
@@ -58,6 +64,8 @@ Server = https://fiso64.github.io/musicbee-linux/arch
 EOF
 
 sudo pacman -Syu musicbee
+
+musicbee-manage install
 ```
 
 ### Manual install
@@ -67,17 +75,22 @@ Install Python, Wine, Winetricks, cabextract, icoutils, 7-Zip and Zenity using y
 ```bash
 git clone https://github.com/fiso64/musicbee-linux.git
 cd musicbee-linux
+python3 src/musicbee-manage.py install
 ```
 
-### Finish installation
+This installs the commands in `~/.local/bin`; add it to your PATH if needed.
 
-Download the **Portable Edition** from the [MusicBee download page](https://www.getmusicbee.com/downloads/), then run:
+### Other MusicBee versions
+
+To choose a different version or use your own downloaded Portable ZIP or EXE:
 
 ```bash
-musicbee-manage install ~/Downloads/MusicBeePortable_*.zip
+musicbee-manage versions
+musicbee-manage install --version 3.6.9403.32563
+musicbee-manage install --archive ~/Downloads/MusicBeePortable.zip
 ```
 
-For manual installs, run `python3 src/musicbee-manage.py install ~/Downloads/MusicBeePortable_*.zip` from the cloned directory instead. This installs the commands in `~/.local/bin`; add it to your PATH if needed.
+Add `-y` to skip the installation confirmation.
 
 ### Media controls
 
@@ -158,13 +171,13 @@ Try enabling or disabling `View > Skins > Skin Window Borders`. Unfortunately, t
 
 ## Updating MusicBee, installing plugins
 
-To update MusicBee itself, close it, download a newer Portable archive and run:
+To update MusicBee itself, close it and run:
 
 ```bash
-musicbee-manage install ~/Downloads/MusicBeePortable_*.zip
+musicbee-manage install --update
 ```
 
-or just extract the contents to the MusicBee install location.
+You can also choose a version or use a local archive as shown above.
 
 Installing plugins works as usual: Just follow their normal install process.
 
