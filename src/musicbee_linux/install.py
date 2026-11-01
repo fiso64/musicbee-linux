@@ -38,7 +38,7 @@ def record_environment(state: Path, prefix: Path) -> None:
 
 def ensure_bootstrap(prefix: Path, *, refresh: bool) -> None:
     require_commands("wine", "wineboot", "winetricks", "cabextract", prefix=prefix)
-    server = wine_server(prefix)
+    server = wine_server(prefix, use_environment=False)
     prefix.parent.mkdir(parents=True, exist_ok=True)
     if not (prefix / "system.reg").is_file():
         print("Creating dedicated 64-bit/WoW64 Wine prefix ...")
@@ -47,8 +47,13 @@ def ensure_bootstrap(prefix: Path, *, refresh: bool) -> None:
     marker = prefix / ".musicbee-bootstrap-complete"
     if not marker.exists() or refresh:
         print("Installing .NET 4.8 and MusicBee dependencies (interactive prompts may appear) ...")
-        call(["winetricks", "-q", "dotnet48", "xmllite", "corefonts", "cjkfonts", "gdiplus"],
-             env=wine_env(prefix))
+        try:
+            call(["winetricks", "-q", "dotnet48", "xmllite", "corefonts", "cjkfonts", "gdiplus"],
+                 env=wine_env(prefix))
+        except subprocess.CalledProcessError:
+            print("Wine dependency setup failed. Check the output above; 32-bit Wine support is required. "
+                  "On Debian 13 with distro Wine, enable i386 and install wine32:i386.", file=sys.stderr)
+            raise
         marker.touch()
     else:
         print("Existing Wine prefix found; skipping Winetricks dependencies.")

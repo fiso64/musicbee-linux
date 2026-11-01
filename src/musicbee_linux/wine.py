@@ -74,9 +74,10 @@ def wine_selection(prefix: Path | None = None) -> str:
 def winehq_bin(prefix: Path | None = None) -> Path | None:
     selection = wine_selection(prefix)
     if selection != "auto":
-        directory = Path(f"/opt/wine-{selection}/bin")
-        if not os.access(directory / "wine", os.X_OK):
-            die(f"WineHQ {selection} not found at {directory / 'wine'}. Install it or set wine to auto.")
+        executable = Path(selection) if os.path.isabs(selection) else Path(f"/opt/wine-{selection}/bin/wine")
+        directory = executable.parent
+        if not os.access(executable, os.X_OK):
+            die(f"Wine not found at {executable}. Install it or set wine to auto.")
         return directory
     path = os.environ.get("PATH", os.defpath)
     if shutil.which("wine", path=path):
@@ -101,14 +102,14 @@ def require_commands(*names: str, prefix: Path | None = None) -> None:
         die(f"Missing required commands: {', '.join(missing)}. Install Wine, Winetricks and cabextract through your package manager.")
 
 
-def wine_server(prefix: Path | None = None) -> str:
+def wine_server(prefix: Path | None = None, *, use_environment: bool = True) -> str:
     directory = winehq_bin(prefix)
     if directory:
         candidate = directory / "wineserver"
         if not os.access(candidate, os.X_OK):
             die(f"WineHQ server not found: {candidate}")
         return str(candidate)
-    configured = os.environ.get("WINESERVER")
+    configured = os.environ.get("WINESERVER") if use_environment else None
     if configured:
         return configured
     found = shutil.which("wineserver", path=wine_path(prefix))
@@ -129,12 +130,20 @@ def wine_env(prefix: Path, *, init: bool = False) -> dict[str, str]:
     env["PATH"] = wine_path(prefix)
     directory = winehq_bin(prefix)
     if directory:
-        env["WINE"] = str(directory / "wine")
+        selection = wine_selection(prefix)
+        env["WINE"] = selection if os.path.isabs(selection) else str(directory / "wine")
         env["WINELOADER"] = env["WINE"]
         env["WINESERVER"] = wine_server(prefix)
+    else:
+        env.pop("WINE", None)
+        env.pop("WINELOADER", None)
+        env.pop("WINESERVER", None)
+        executable = shutil.which("wine", path=env["PATH"])
+        if executable:
+            env["WINE"] = executable
     if not env.get("WINESERVER") and not shutil.which("wineserver", path=env["PATH"]):
         try:
-            env["WINESERVER"] = wine_server(prefix)
+            env["WINESERVER"] = wine_server(prefix, use_environment=False)
         except SetupError:
             pass
     env.setdefault("WINEDEBUG", "-all")
@@ -181,21 +190,26 @@ def configure(args: argparse.Namespace, paths: dict[str, Path]) -> None:
         die(f"Unknown setting {name!r}. Run 'musicbee-manage config' to list settings.")
     default, values, description = TWEAKS[name]
     current = tweak_value(config, name)
+    choices = ', '.join(values) + (', /absolute/path/to/wine' if name == 'wine' else '')
     if args.value in (None, "info"):
         print(paint(name, "1;36"))
         print(description)
-        print(f"\nValues:  {', '.join(values)}")
+        print(f"\nValues:  {choices}")
         print(f"Default: {default}")
         print(f"Current: {current}")
+        if name == "wine":
+            print("Example: musicbee-manage config wine /opt/wine-staging/bin/wine")
         return
-    value = args.value.casefold()
-    if value not in values:
-        die(f"Invalid value for {name}: {args.value!r}. Choose: {', '.join(values)}.")
+    value = args.value if name == "wine" and os.path.isabs(args.value) else args.value.casefold()
+    if value not in values and not (name == "wine" and os.path.isabs(value)):
+        die(f"Invalid value for {name}: {args.value!r}. Choose: {choices}.")
     if name == "wine" and value != "auto":
-        directory = Path(f"/opt/wine-{value}/bin")
-        for executable in ("wine", "wineboot", "winepath", "wineserver"):
-            if not os.access(directory / executable, os.X_OK):
-                die(f"WineHQ {value} is missing {executable} in {directory}.")
+        executable = Path(value) if os.path.isabs(value) else Path(f"/opt/wine-{value}/bin/wine")
+        if executable.name != "wine":
+            die("Select the Wine executable named 'wine'.")
+        for candidate in (executable, *(executable.parent / tool for tool in ("wineboot", "winepath", "wineserver"))):
+            if not os.access(candidate, os.X_OK):
+                die(f"Selected Wine is missing {candidate}.")
     bootstrapped = (paths["prefix"] / ".musicbee-bootstrap-complete").is_file()
     if name in ("allfonts", "font-smoothing") and bootstrapped:
         apply_font_tweak(name, value, paths["prefix"])

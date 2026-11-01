@@ -61,7 +61,7 @@ overrides:
   rpm:
     depends:
       - python3
-      - wine
+      - (wine or wine-staging or winehq-stable or winehq-staging or winehq-devel)
       - winetricks
       - cabextract
       - icoutils

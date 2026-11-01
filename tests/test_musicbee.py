@@ -149,10 +149,36 @@ class PortableExtractionTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             state = Path(tmp)
             with patch.object(os, 'access', return_value=False):
-                with self.assertRaisesRegex(settings.SetupError, 'missing wine'):
+                with self.assertRaisesRegex(settings.SetupError, 'missing .*/wine'):
                     wine.configure(argparse.Namespace(option='wine', value='staging'),
                                  {'state': state, 'prefix': state / 'wineprefix'})
             self.assertEqual(settings.read_config(state), {})
+
+    def test_system_wine_ignores_inherited_wine_selection(self):
+        with patch.dict(os.environ, {'PATH': '/usr/bin', 'WINE': '/wrong/wine',
+                                    'WINELOADER': '/wrong/loader', 'WINESERVER': '/wrong/server'}, clear=True), \
+             patch.object(wine, 'wine_selection', return_value='auto'), \
+             patch.object(shutil, 'which', side_effect=lambda name, path=None: f'/usr/bin/{name}'):
+            env = wine.wine_env(Path('/tmp/test-prefix'))
+            self.assertEqual(env['WINE'], '/usr/bin/wine')
+            self.assertNotIn('WINELOADER', env)
+            self.assertNotIn('WINESERVER', env)
+
+    def test_custom_wine_path_preserves_case_and_selects_helpers(self):
+        with TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            directory = state / 'WineBuild' / 'bin'
+            directory.mkdir(parents=True)
+            for name in ('wine', 'wineboot', 'winepath', 'wineserver'):
+                executable = directory / name
+                executable.touch()
+                executable.chmod(0o755)
+            prefix = state / 'wineprefix'
+            wine.configure(argparse.Namespace(option='wine', value=str(directory / 'wine')),
+                           {'state': state, 'prefix': prefix})
+            env = wine.wine_env(prefix)
+            self.assertEqual(env['WINE'], str(directory / 'wine'))
+            self.assertEqual(env['WINESERVER'], str(directory / 'wineserver'))
 
     def test_musicbee_path_arguments(self):
         with TemporaryDirectory() as tmp:

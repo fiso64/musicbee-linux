@@ -11,7 +11,8 @@ import tempfile
 TWEAKS = {
     "wine": ("auto", ("auto", "stable", "staging", "devel"),
         "Choose Wine for MusicBee. Auto uses Wine on PATH, or a single WineHQ installation in /opt. "
-        "Other values select that WineHQ branch. Switching Wine can update the prefix."),
+        "Other values select a WineHQ branch in /opt or an absolute path to a Wine executable. "
+        "Switching Wine can update the prefix."),
     "audio-latency": ("off", ("on", "off"),
         "Set PulseAudio-compatible latency to 60 ms to help with stuttering. "
         "May increase audio delay; off leaves the environment unchanged."),
@@ -78,7 +79,7 @@ def tweak_value(config: dict, name: str) -> str:
     if not isinstance(tweaks, dict):
         die("Invalid tweaks configuration: expected an object.")
     value = tweaks.get(name, TWEAKS[name][0])
-    if value not in TWEAKS[name][1]:
+    if value not in TWEAKS[name][1] and not (name == "wine" and isinstance(value, str) and os.path.isabs(value)):
         die(f"Invalid saved value for {name}: {value!r}.")
     return value
 
