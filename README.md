@@ -70,7 +70,7 @@ musicbee-manage install
 
 ### Manual install
 
-Install Python, Wine, Winetricks, cabextract, icoutils, 7-Zip and Zenity using your distribution's package manager. Then:
+Install Python, Wine, Winetricks, cabextract, icoutils, 7-Zip and Zenity. Then:
 
 ```bash
 git clone https://github.com/fiso64/musicbee-linux.git
@@ -89,8 +89,6 @@ musicbee-manage versions
 musicbee-manage install --version 3.6.9403.32563
 musicbee-manage install --archive ~/Downloads/MusicBeePortable.zip
 ```
-
-Add `-y` to skip the installation confirmation.
 
 ### Media controls
 
@@ -132,42 +130,11 @@ musicbee --help   # View all options
 
 See MusicBee's [documented options](https://getmusicbee.com/forum/index.php?topic=6885.0).
 
-## Tweaks & troubleshooting
+## Troubleshooting
 
-This package already includes most of the known tweaks to get MusicBee running smoothly:
+See [troubleshooting and known problems](docs/troubleshooting.md).
 
-- CJK fonts and other dependencies
-- BASS AAC decoder for AAC and M4A playback
-- MPRISBee for Linux media controls
-- Native file-manager integration
-- A workaround for the crashing file converters tab
-
-Additional optional tweaks can be listed with `musicbee-manage config`. If you're having issues, look here first. Example usage:
-
-```bash
-musicbee-manage config                    # list all settings
-musicbee-manage config gdiplus            # describe a setting
-musicbee-manage config audio-latency on   # example: sometimes useful against stuttering
-```
-
-For desktop launch problems, check `~/.local/share/musicbee/desktop-launch.log` (or `$XDG_DATA_HOME/musicbee/desktop-launch.log`). For more Wine diagnostics when launching from a terminal, run `WINEDEBUG=warn+all musicbee`. Please include `musicbee-manage --version` output when opening issues.
-
-<details>
-  <summary><b>Known problems</b></summary>
-
-### Dragging tabs to rearrange them fails
-Close MusicBee, then list and rearrange the saved tabs:
-
-```bash
-musicbee-manage tabs       # list tabs in their current order
-musicbee-manage tabs 3 1   # move tab 3 to the first position
-```
-
-### Some skins have broken/ugly window borders or missing min/max/close buttons
-
-Try enabling or disabling `View > Skins > Skin Window Borders`. Unfortunately, there is no confirmed solution that works for every skin.
-
-</details>
+Feel free to [open an issue](https://github.com/fiso64/musicbee-linux/issues) (or create a PR!) when you think the problem is specific to the Linux integration. Please include the output of `musicbee-manage --version`.
 
 ## Updating MusicBee, installing plugins
 
@@ -183,7 +150,7 @@ Installing plugins works as usual: Just follow their normal install process.
 
 ## Uninstalling
 
-Uninstalling this package leaves MusicBee and its settings in place. You can delete its Wine prefix at `~/.local/share/musicbee/wineprefix` to remove them.
+Uninstalling this package leaves MusicBee and its settings in place.
 
 ```bash
 # Fedora
@@ -198,6 +165,8 @@ sudo pacman -R musicbee
 # Manual installs
 rm -f ~/.local/bin/musicbee ~/.local/bin/musicbee-manage ~/.local/share/applications/musicbee.desktop
 ```
+
+To remove MusicBee (along with its data and settings) completely, delete its Wine prefix at `~/.local/share/musicbee/wineprefix`
 
 ## Credits
 
