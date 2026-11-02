@@ -65,9 +65,10 @@ jobs:
           mkdir "$GNUPGHOME/keyring"
           cp "$key" "$GNUPGHOME/keyring/gpg-pubkey-${fingerprint,,}.key"
           shopt -s nullglob
-          signed=(build/site/rpm/*.rpm)
           asset=(build/download/*.rpm)
-          [[ ${#signed[@]} -eq 1 && ${#asset[@]} -eq 1 ]]
+          [[ ${#asset[@]} -eq 1 ]]
+          signed=("build/site/rpm/$(basename "${asset[0]}")")
+          [[ -f "${signed[0]}" ]]
           [[ "$(rpm --define '_keyring fs' --define "_keyringpath $GNUPGHOME/keyring" -qp --qf '%{VERSION}' "${signed[0]}")" == "${RELEASE_TAG#v}" ]]
           cmp "${signed[0]}" "${asset[0]}"
           rpmkeys --define '_keyring fs' --define "_keyringpath $GNUPGHOME/keyring" \
@@ -75,9 +76,10 @@ jobs:
           debs=(build/download/*.deb)
           [[ ${#debs[@]} -eq 1 ]]
           python3 scripts/apt-repository.py verify build/site "${debs[0]}" "$key" "${RELEASE_TAG#v}"
-          arch_packages=(build/site/arch/*.pkg.tar.zst)
           arch_assets=(build/download/*.pkg.tar.zst)
-          [[ ${#arch_packages[@]} -eq 1 && ${#arch_assets[@]} -eq 1 ]]
+          [[ ${#arch_assets[@]} -eq 1 ]]
+          arch_packages=("build/site/arch/$(basename "${arch_assets[0]}")")
+          [[ -f "${arch_packages[0]}" ]]
           cmp "${arch_packages[0]}" "${arch_assets[0]}"
           gpg --batch --verify "${arch_packages[0]}.sig" "${arch_packages[0]}"
           gpg --batch --verify build/site/arch/musicbee-linux.db.sig build/site/arch/musicbee-linux.db

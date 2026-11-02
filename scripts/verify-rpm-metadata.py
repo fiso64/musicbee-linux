@@ -53,8 +53,8 @@ def verify(root: Path) -> None:
     if location is None or checksum is None or not checksum.text:
         raise ValueError('Incomplete RPM metadata')
     rpm = check_file(root, location.attrib['href'], checksum.text, checksum.attrib['type'])
-    if rpm.suffix != '.rpm' or len(list(root.glob('*.rpm'))) != 1:
-        raise ValueError('Expected exactly one RPM at the repository root')
+    if rpm.suffix != '.rpm' or rpm.parent != root:
+        raise ValueError('Expected an RPM at the repository root')
 
 
 if __name__ == '__main__':

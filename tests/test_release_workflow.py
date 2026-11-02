@@ -90,8 +90,8 @@ esac
             self.assertIn('--pinentry-mode loopback --passphrase-file', (stage / 'prepare.log').read_text())
             self.assertNotIn('test passphrase', (stage / 'prepare.log').read_text())
             self.assertEqual((stage / 'pages' / 'index.html').read_text(), 'keep this page')
-            self.assertEqual([p.name for p in (stage / 'pages' / 'rpm').glob('*.rpm')],
-                             [f'musicbee-{VERSION}-1.noarch.rpm'])
+            self.assertEqual({p.name for p in (stage / 'pages' / 'rpm').glob('*.rpm')},
+                             {'musicbee-0.0.0-1.noarch.rpm', f'musicbee-{VERSION}-1.noarch.rpm'})
             self.assertTrue((stage / 'pages' / 'rpm' / 'repodata' / 'repomd.xml.asc').is_file())
             self.assertTrue((stage / 'pages' / 'apt/dists/stable/InRelease').is_file())
             self.assertTrue((stage / 'pages' / 'musicbee.sources').is_file())
@@ -100,7 +100,7 @@ esac
             verifier = source / 'scripts' / 'verify-rpm-metadata.py'
             subprocess.run(['python3', str(verifier), str(stage / 'pages' / 'rpm')], check=True,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            rpm = next((stage / 'pages' / 'rpm').glob('*.rpm'))
+            rpm = stage / 'pages' / 'rpm' / f'musicbee-{VERSION}-1.noarch.rpm'
             with rpm.open('ab') as stream:
                 stream.write(b'corrupt')
             corrupted = subprocess.run(['python3', str(verifier), str(stage / 'pages' / 'rpm')],

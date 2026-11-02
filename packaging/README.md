@@ -51,6 +51,11 @@ or deployment workflow from Actions with the existing tag; if a draft already
 exists, remove it before re-running preparation. Check the deployment status
 and test repository upgrades after publishing.
 
+Each release carries forward package files and immutable metadata from the latest
+published repository. Current indexes still list the newest package only; APT
+uses by-hash indexes so clients can fetch the index matching their signed release.
+This does not eliminate cache mismatches between detached signatures and indexes.
+
 For AUR, extract `musicbee-aur.tar.gz`, test the PKGBUILD on Arch, then copy
 both files into the AUR checkout and push it. To generate them locally, run
 `python3 scripts/generate-aur.py --commit "$(git rev-parse HEAD)" --output build/aur`;

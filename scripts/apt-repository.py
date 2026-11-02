@@ -80,12 +80,15 @@ def build(site: Path, deb: Path, key: Path, fingerprint: str) -> None:
         directory.mkdir(parents=True)
         for name, data in (("Packages", index), ("Packages.gz", gzip.compress(index, mtime=0))):
             (directory / name).write_bytes(data)
+            by_hash = directory / "by-hash/SHA256"
+            by_hash.mkdir(parents=True, exist_ok=True)
+            (by_hash / digest(data)).write_bytes(data)
             entries.append((f"main/binary-{arch}/{name}", data))
     release_dir = repo / "dists/stable"
     release = ("Origin: MusicBee on Linux\nLabel: MusicBee on Linux\nSuite: stable\n"
                f"Codename: stable\nDate: {format_datetime(datetime.now(timezone.utc), usegmt=True)}\n"
                f"Architectures: {' '.join(ARCHES)}\nComponents: main\n"
-               "Description: MusicBee on Linux integration\nSHA256:\n" +
+               "Description: MusicBee on Linux integration\nAcquire-By-Hash: yes\nSHA256:\n" +
                "".join(f" {digest(data)} {len(data):16d} {name}\n" for name, data in entries))
     (release_dir / "Release").write_text(release, encoding="utf-8")
     args = ["gpg", "--batch", "--yes"]
@@ -127,6 +130,8 @@ def verify(site: Path, deb: Path, key: Path, version: str) -> None:
             data = (release_dir / path).read_bytes()
             if hashes.get(path) != (digest(data), len(data)):
                 raise ValueError(f"APT index checksum mismatch: {path}")
+            if (release_dir / f"main/binary-{arch}/by-hash/SHA256" / digest(data)).read_bytes() != data:
+                raise ValueError(f"APT by-hash index mismatch: {path}")
             if (gzip.decompress(data) if name.endswith(".gz") else data) != index:
                 raise ValueError(f"APT index does not match DEB: {path}")
     if set(hashes) != expected:

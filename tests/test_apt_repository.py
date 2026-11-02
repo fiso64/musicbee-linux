@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+import hashlib
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,26 @@ spec.loader.exec_module(apt_repo)
 
 @unittest.skipUnless(all(shutil.which(tool) for tool in ('nfpm', 'ar', 'gpg')), 'nFPM, ar and gpg required')
 class AptRepositoryTests(unittest.TestCase):
+    def test_build_writes_content_addressed_indexes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            site = root / 'site'
+            site.mkdir()
+            key = root / 'key'
+            key.write_text('-----BEGIN PGP PUBLIC KEY BLOCK-----\nkey\n')
+            deb = root / 'musicbee.deb'
+            deb.write_bytes(b'package')
+            with patch.object(apt_repo, 'package_index', return_value=b'index'), \
+                 patch.object(apt_repo.subprocess, 'run'):
+                apt_repo.build(site, deb, key, 'test')
+            release = site / 'apt/dists/stable'
+            self.assertIn('Acquire-By-Hash: yes\n', (release / 'Release').read_text())
+            for arch in apt_repo.ARCHES:
+                directory = release / 'main' / f'binary-{arch}'
+                for name in ('Packages', 'Packages.gz'):
+                    data = (directory / name).read_bytes()
+                    self.assertEqual((directory / 'by-hash/SHA256' / hashlib.sha256(data).hexdigest()).read_bytes(), data)
+
     def test_signed_repository_and_corruption_detection(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

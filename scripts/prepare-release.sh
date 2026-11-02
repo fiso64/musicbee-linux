@@ -75,8 +75,8 @@ python3 "$root/scripts/apt-repository.py" build "$prepared" "${debs[0]}" "$prepa
 python3 "$root/scripts/apt-repository.py" verify "$prepared" "${debs[0]}" "$prepared/RPM-GPG-KEY-musicbee" "$version"
 git clone --no-local --branch gh-pages "$pages" "$stage/pages"
 git -C "$stage/pages" remote set-url origin "$origin"
-# This is a new disposable clone: replace its RPM directory so only the new
-# package and matching metadata are published. Preserve the site's other files.
+python3 "$root/scripts/retain-repository-files.py" "$stage/pages" "$prepared"
+# Replace the repository directories with the new indexes and retained files.
 rm -rf -- "$stage/pages/rpm"
 rm -rf -- "$stage/pages/apt"
 cp -R -- "$prepared/rpm" "$stage/pages/rpm"

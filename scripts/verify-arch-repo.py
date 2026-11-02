@@ -7,10 +7,6 @@ import tarfile
 
 
 def verify(directory: Path, version: str) -> None:
-    packages = list(directory.glob('*.pkg.tar.zst'))
-    if len(packages) != 1:
-        raise ValueError('Expected exactly one Arch package')
-    package = packages[0]
     with tarfile.open(directory / 'musicbee-linux.db', 'r:*') as archive:
         entries = [m for m in archive.getmembers() if m.isfile() and m.name.endswith('/desc')]
         if len(entries) != 1:
@@ -21,6 +17,10 @@ def verify(directory: Path, version: str) -> None:
         lines = field.splitlines()
         if lines and lines[0].startswith('%') and lines[0].endswith('%'):
             metadata[lines[0][1:-1]] = lines[1:]
+    filenames = metadata.get('FILENAME', [])
+    if len(filenames) != 1 or Path(filenames[0]).name != filenames[0]:
+        raise ValueError('Invalid Arch package filename')
+    package = directory / filenames[0]
     expected = {
         'NAME': ['musicbee'],
         'VERSION': [version + '-1'],

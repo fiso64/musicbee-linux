@@ -131,6 +131,7 @@ jobs:
       - name: Build packages and signed repositories
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           RPM_SIGNING_KEY: ${{ secrets.RPM_SIGNING_KEY }}
           RPM_SIGNING_PASSPHRASE: ${{ secrets.RPM_SIGNING_PASSPHRASE }}
         run: |
@@ -168,10 +169,27 @@ jobs:
           gpg --batch --verify build/arch/musicbee-linux.db.sig build/arch/musicbee-linux.db
           python3 scripts/verify-arch-repo.py build/arch "${RELEASE_TAG#v}"
           cp -R build/arch "$site/arch"
+          # Retain immutable files from the last published release, including
+          # files that release retained from earlier versions.
+          previous="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+          mkdir -p build/previous-download build/previous-site
+          gh release download "$previous" --repo "$GITHUB_REPOSITORY" --dir build/previous-download --pattern musicbee-repository.tar.gz
+          python3 - <<'PY'
+          import tarfile
+          with tarfile.open('build/previous-download/musicbee-repository.tar.gz', 'r:gz') as archive:
+              if any(not (member.isfile() or member.isdir()) for member in archive.getmembers()):
+                  raise SystemExit('Previous repository archive contains an unsupported entry')
+              archive.extractall('build/previous-site', filter='data')
+          PY
+          old_key="$(gpg --batch --with-colons --show-keys build/previous-site/RPM-GPG-KEY-musicbee | awk -F: '$1 == "fpr" && !seen++ { print $10 }')"
+          [[ "$old_key" == "$fingerprint" ]]
+          gpg --batch --verify build/previous-site/rpm/repodata/repomd.xml.asc build/previous-site/rpm/repodata/repomd.xml
+          python3 scripts/verify-rpm-metadata.py build/previous-site/rpm
+          python3 scripts/retain-repository-files.py build/previous-site "$site"
           cp website/index.html "$site/index.html"
           chmod -R a+rX "$site"
           mkdir -p build/release-assets
-          cp "$site"/rpm/*.rpm build/release-assets/
+          cp "$site/rpm/$(basename "${packages[0]}")" build/release-assets/
           cp "${debs[0]}" build/release-assets/
           cp "${arch_packages[0]}" "${arch_packages[0]}.sig" build/release-assets/
           tar -C "$site" -czf build/release-assets/musicbee-repository.tar.gz .
