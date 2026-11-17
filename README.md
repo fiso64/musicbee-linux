@@ -96,6 +96,11 @@ Linux media controls require Wine with the AF_UNIX support used by MPRISBee. Win
 
 If media controls don't work, try Wine Staging. (For example, on Ubuntu/Debian, see [WineHQ's installation guide](https://gitlab.winehq.org/wine/wine/-/wikis/Debian-Ubuntu)). Select it with `musicbee-manage config wine staging`.
 
+
+### DPI and other tweaks
+
+There are some additional tweaks accessible via the `musicbee-manage config` command. For example, you can modify the DPI if MusicBee too small with `musicbee-manage config dpi`. See  
+
 ## Usage
 
 ### Your music
