@@ -21,7 +21,7 @@ from .settings import die, read_config, tweak_value, write_config, write_json_at
 from .desktop import extract_musicbee_icon, install_self, make_launcher, regenerate_launcher
 from .media_controls import ensure_media_controls
 from .utils import call, maintenance_lock, require_ready, sha256
-from .wine import (apply_font_tweak, apply_windows_version, musicbee_version,
+from .wine import (apply_dpi, apply_font_tweak, apply_windows_version, musicbee_version,
                    require_commands, run_musicbee, wine_env, wine_server)
 
 
@@ -65,6 +65,7 @@ def initialize_prefix(paths: dict[str, Path]) -> None:
     ensure_bootstrap(prefix, refresh=False)
     version = tweak_value(config, "windows-version")
     apply_windows_version(version, prefix)
+    apply_dpi(tweak_value(config, 'dpi'), prefix, state, config)
     config.setdefault("tweaks", {})["windows-version"] = version
     for name in ("allfonts", "font-smoothing"):
         if tweak_value(config, name) == "on":

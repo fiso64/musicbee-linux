@@ -64,6 +64,54 @@ class CjkFallbackTests(unittest.TestCase):
             run.assert_not_called()
 
 
+class DpiTests(unittest.TestCase):
+    def test_wait_timeout_warns_without_terminating_other_programs(self):
+        with patch.object(wine, 'wine_server', return_value='wineserver'), \
+             patch.object(subprocess, 'run', side_effect=subprocess.TimeoutExpired('wineserver', 30)) as run, \
+             patch('sys.stderr', new_callable=io.StringIO) as error:
+            wine.wait_for_dpi_session(Path('/tmp/prefix'), {})
+        self.assertEqual(run.call_args.args[0], ['wineserver', '-w'])
+        self.assertIn('Close all programs', error.getvalue())
+
+    def test_preserves_and_restores_existing_value(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prefix, state = root / 'prefix', root / 'state'
+            prefix.mkdir()
+            (prefix / '.musicbee-bootstrap-complete').touch()
+            paths = {'prefix': prefix, 'state': state}
+            result = subprocess.CompletedProcess([], 0, '    LogPixels    REG_DWORD    0x78\n', '')
+            with patch.object(wine, 'wine_env', return_value={}), patch.object(wine, 'wait_for_dpi_session'), \
+                 patch.object(subprocess, 'run', return_value=result), patch.object(wine, 'call') as call:
+                wine.configure(argparse.Namespace(option='dpi', value='192'), paths)
+                self.assertEqual(settings.read_config(state)['dpi-original'], 120)
+                self.assertEqual(call.call_args.args[0][-3:], ['/d', '192', '/f'])
+                wine.configure(argparse.Namespace(option='dpi', value='144'), paths)
+                self.assertEqual(settings.read_config(state)['dpi-original'], 120)
+                wine.configure(argparse.Namespace(option='dpi', value='default'), paths)
+                self.assertEqual(call.call_args.args[0][-3:], ['/d', '120', '/f'])
+                self.assertNotIn('dpi-original', settings.read_config(state))
+
+    def test_restores_absent_value_and_rejects_invalid_values(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prefix, state = root / 'prefix', root / 'state'
+            prefix.mkdir()
+            (prefix / '.musicbee-bootstrap-complete').touch()
+            paths = {'prefix': prefix, 'state': state}
+            results = [subprocess.CompletedProcess([], 0, '', ''),
+                       subprocess.CompletedProcess([], 0, '    LogPixels    REG_DWORD    0xc0\n', '')]
+            with patch.object(wine, 'wine_env', return_value={}), patch.object(wine, 'wait_for_dpi_session'), \
+                 patch.object(subprocess, 'run', side_effect=results), patch.object(wine, 'call') as call:
+                wine.configure(argparse.Namespace(option='dpi', value='192'), paths)
+                wine.configure(argparse.Namespace(option='dpi', value='default'), paths)
+                self.assertEqual(call.call_args.args[0][-3:], ['/v', 'LogPixels', '/f'])
+                self.assertEqual(call.call_args.args[0][2], 'delete')
+            for value in ('95', '481', '-1', '12.5'):
+                with self.assertRaises(settings.SetupError):
+                    wine.configure(argparse.Namespace(option='dpi', value=value), paths)
+
+
 class PortableExtractionTests(unittest.TestCase):
     def setUp(self):
         patcher = patch.object(installation, 'ensure_aac_decoder')

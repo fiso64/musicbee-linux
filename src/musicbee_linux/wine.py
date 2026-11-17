@@ -14,7 +14,7 @@ import subprocess
 import sys
 
 from . import __version__
-from .settings import TWEAKS, SetupError, die, read_config, tweak_value, write_config
+from .settings import TWEAKS, SetupError, die, read_config, tweak_value, valid_tweak, write_config
 from .utils import call, locations, maintenance_lock, require_ready
 
 
@@ -223,6 +223,51 @@ def apply_windows_version(value: str, prefix: Path) -> None:
     call(["winetricks", "-q", {"8.1": "win81", "10": "win10"}[value]], env=wine_env(prefix))
 
 
+def wait_for_dpi_session(prefix: Path, env: dict[str, str]) -> None:
+    # Wine caches display metrics for the lifetime of the server.
+    try:
+        print('Waiting for the MusicBee Wine session to finish applying DPI...', flush=True)
+        subprocess.run([wine_server(prefix), '-w'], env=env, check=True, timeout=30)
+    except (OSError, subprocess.SubprocessError, SetupError) as exc:
+        print(f'Wine is still running or could not be checked ({exc}). Close all programs '
+              'using the MusicBee prefix and wait for Wine to exit before launching MusicBee.',
+              file=sys.stderr)
+
+
+def apply_dpi(value: str, prefix: Path, state: Path, config: dict) -> None:
+    """Set Wine's user DPI and retain the previous value for a later reset."""
+    backup_key = 'dpi-original'
+    if value == 'default' and backup_key not in config:
+        return
+    env = wine_env(prefix)
+    key = r'HKCU\Control Panel\Desktop'
+    if backup_key not in config:
+        result = subprocess.run(['wine', 'reg', 'query', key], env=env, capture_output=True,
+                                text=True, check=True)
+        match = re.search(r'^\s+LogPixels\s+REG_DWORD\s+(0x[0-9a-f]+|\d+)\s*$',
+                          result.stdout, re.I | re.M)
+        if not match and re.search(r'^\s+LogPixels\s+', result.stdout, re.I | re.M):
+            die('Cannot preserve the existing Wine DPI: unexpected registry value.')
+        config[backup_key] = int(match.group(1), 0) if match else None
+        # Preserve the original before modifying the registry, including on failure.
+        write_config(state, config)
+    original = config[backup_key]
+    if original is not None and (not isinstance(original, int) or isinstance(original, bool) or not 0 <= original <= 0xffffffff):
+        die('Invalid saved original DPI value.')
+    desired = original if value == 'default' else int(value)
+    if desired is None:
+        result = subprocess.run(['wine', 'reg', 'query', key], env=env, capture_output=True,
+                                text=True, check=True)
+        if re.search(r'^\s+LogPixels\s+', result.stdout, re.I | re.M):
+            call(['wine', 'reg', 'delete', key, '/v', 'LogPixels', '/f'], env=env)
+    else:
+        call(['wine', 'reg', 'add', key, '/v', 'LogPixels', '/t', 'REG_DWORD',
+              '/d', str(desired), '/f'], env=env)
+    wait_for_dpi_session(prefix, env)
+    if value == 'default':
+        del config[backup_key]
+
+
 def configure(args: argparse.Namespace, paths: dict[str, Path]) -> None:
     config = read_config(paths["state"])
     color = sys.stdout.isatty() and not os.environ.get("NO_COLOR") and os.environ.get("TERM") != "dumb"
@@ -242,6 +287,8 @@ def configure(args: argparse.Namespace, paths: dict[str, Path]) -> None:
     default, values, description = TWEAKS[name]
     current = tweak_value(config, name)
     choices = ', '.join(values) + (', /absolute/path/to/wine' if name == 'wine' else '')
+    if name == 'dpi':
+        choices += ', 96–480'
     if args.value in (None, "info"):
         print(paint(name, "1;36"))
         print(description)
@@ -252,7 +299,7 @@ def configure(args: argparse.Namespace, paths: dict[str, Path]) -> None:
             print("Example: musicbee-manage config wine /opt/wine-staging/bin/wine")
         return
     value = args.value if name == "wine" and os.path.isabs(args.value) else args.value.casefold()
-    if value not in values and not (name == "wine" and os.path.isabs(value)):
+    if not valid_tweak(name, value):
         die(f"Invalid value for {name}: {args.value!r}. Choose: {choices}.")
     if name == "wine" and value != "auto":
         executable = Path(value) if os.path.isabs(value) else Path(f"/opt/wine-{value}/bin/wine")
@@ -267,12 +314,15 @@ def configure(args: argparse.Namespace, paths: dict[str, Path]) -> None:
     if name == "windows-version" and bootstrapped:
         with maintenance_lock(paths["prefix"], "Close MusicBee before changing the Windows version."):
             apply_windows_version(value, paths["prefix"])
+    if name == 'dpi' and bootstrapped:
+        with maintenance_lock(paths['prefix'], 'Close MusicBee before changing DPI.'):
+            apply_dpi(value, paths['prefix'], paths['state'], config)
     config.setdefault("tweaks", {})[name] = value
     write_config(paths["state"], config)
     print(f"{name} = {value}")
     if name == "allfonts" and value == "off":
         print("Previously installed fonts remain in the Wine prefix.")
-    if name in ("allfonts", "font-smoothing", "windows-version") and not bootstrapped:
+    if name in ("allfonts", "font-smoothing", "windows-version", "dpi") and not bootstrapped:
         print("The setting will be applied during initial setup.")
     else:
         print("Restart MusicBee to apply this setting.")

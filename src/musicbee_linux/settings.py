@@ -22,6 +22,9 @@ TWEAKS = {
     "font-smoothing": ("off", ("on", "off"),
         "Enable RGB font smoothing in the MusicBee Wine prefix. "
         "Turning it off disables Wine font smoothing."),
+    "dpi": ("default", ("default",),
+        "Set Wine interface scaling in DPI (96–480; 192 is 200%). "
+        "Default leaves the existing Wine setting alone or restores it after a custom value."),
     "gdiplus": ("native", ("native", "wine"),
         "Native GDI+ displays blurred backgrounds correctly but may not render grayscale JPEG artwork. "
         "Wine GDI+ supports grayscale JPEG artwork but may not blur backgrounds correctly."),
@@ -79,8 +82,18 @@ def tweak_value(config: dict, name: str) -> str:
     if not isinstance(tweaks, dict):
         die("Invalid tweaks configuration: expected an object.")
     value = tweaks.get(name, TWEAKS[name][0])
-    if value not in TWEAKS[name][1] and not (name == "wine" and isinstance(value, str) and os.path.isabs(value)):
+    if not valid_tweak(name, value):
         die(f"Invalid saved value for {name}: {value!r}.")
     return value
+
+
+def valid_tweak(name: str, value: object) -> bool:
+    if value in TWEAKS[name][1]:
+        return True
+    if name == "wine":
+        return isinstance(value, str) and os.path.isabs(value)
+    if name == "dpi":
+        return isinstance(value, str) and value.isascii() and value.isdecimal() and 96 <= int(value) <= 480
+    return False
 
 
