@@ -6,9 +6,21 @@ import getpass
 import os
 from pathlib import Path
 import re
+import sys
 import tempfile
 
 from .settings import die
+
+
+def entrypoint() -> Path:
+    executable = Path(sys.argv[0]).resolve()
+    if executable.name in ("musicbee", "musicbee-manage", "musicbee-manage.py") and executable.is_file():
+        return executable
+    return Path(__file__).resolve().parent.parent / "musicbee-manage.py"
+
+
+def state_directory() -> Path:
+    return Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")).expanduser() / "musicbee"
 
 
 def parse_windows_path(value: str) -> tuple[str, list[str]]:

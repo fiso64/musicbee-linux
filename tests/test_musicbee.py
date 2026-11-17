@@ -2,6 +2,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import argparse
+from contextlib import contextmanager
 import fcntl
 import getpass
 import os
@@ -11,6 +12,7 @@ import io
 import json
 import subprocess
 import sys
+import time
 import unittest
 import zipfile
 from unittest.mock import patch
@@ -19,19 +21,148 @@ SRC = Path(__file__).resolve().parents[1] / 'src'
 sys.path.insert(0, str(SRC))
 from musicbee_linux import archive as portable_archive, cli, desktop as desktop_integration, media_controls, settings, utils, wine, install as installation
 from musicbee_linux import __version__
+from musicbee_linux import launch_log, timing
 
+
+
+class LaunchTimingTests(unittest.TestCase):
+    def test_desktop_worker_inherits_parent_start_only(self):
+        previous = timing.started_ns()
+        try:
+            with patch.dict(os.environ, {'MUSICBEE_DESKTOP_LOG_WORKER': '1',
+                                         'MUSICBEE_LAUNCH_STARTED_NS': '100'}):
+                timing.inherit_start(200)
+                self.assertEqual(timing.started_ns(), 100)
+                self.assertNotIn('MUSICBEE_LAUNCH_STARTED_NS', os.environ)
+            with patch.dict(os.environ, {'MUSICBEE_DESKTOP_LOG_WORKER': '1',
+                                         'MUSICBEE_LAUNCH_STARTED_NS': 'bad'}):
+                timing.inherit_start(200)
+                self.assertEqual(timing.started_ns(), 200)
+        finally:
+            timing._started_ns = previous
+
+    def test_launch_reports_after_process_starts_and_propagates_failure(self):
+        events = []
+        with patch('sys.stdout', new_callable=io.StringIO):
+            with self.assertRaises(subprocess.CalledProcessError):
+                utils.call([sys.executable, '-c', 'raise SystemExit(7)'],
+                           on_started=lambda: events.append('started'))
+        self.assertEqual(events, ['started'])
+
+    def test_launch_emits_one_timing_line(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prefix, app = root / 'prefix', root / 'prefix/app'
+            app.mkdir(parents=True)
+            (app / 'MusicBee.exe').touch()
+            paths = {'prefix': prefix, 'app': app, 'state': root / 'state'}
+            settings.write_config(paths['state'], {'tweaks': {'windows-version': '8.1'}})
+            def spawn(_command, **kwargs):
+                kwargs['on_started']()
+            with patch.object(wine, 'require_ready'), patch.object(wine, 'require_commands'), \
+                 patch.object(wine, 'repair_cjk_aliases'), \
+                 patch.object(desktop_integration, 'refresh_tool_bridges'), \
+                 patch.object(desktop_integration, 'configure_explorer_redirect'), \
+                 patch.object(wine, 'call', side_effect=spawn), \
+                 patch('sys.stdout', new_callable=io.StringIO) as output:
+                wine.run_musicbee(argparse.Namespace(musicbee_args=[]), paths)
+            lines = output.getvalue().splitlines()
+            self.assertEqual(len(lines), 1)
+            self.assertRegex(lines[0], r'^Launch timing: total=\d+ms \(startup=\d+ms, prepare=\d+ms, fonts=\d+ms, integration=\d+ms, spawn=\d+ms\)$')
 
 
 class CjkFallbackTests(unittest.TestCase):
+    def test_desktop_progress_wraps_full_check_and_skips_cache_hit(self):
+        with TemporaryDirectory() as tmp:
+            prefix = Path(tmp)
+            font = prefix / 'drive_c/windows/Fonts/sourcehansans.ttc'
+            font.parent.mkdir(parents=True)
+            font.touch()
+            events = []
+
+            @contextmanager
+            def progress():
+                events.append('open')
+                try:
+                    yield
+                finally:
+                    events.append('close')
+
+            def query(key, env):
+                events.append('query')
+                return '    MS Gothic    REG_SZ    Source Han Sans\n'
+
+            with patch.object(wine, 'wine_env', return_value={}), \
+                 patch.object(wine, 'cjk_cache_fingerprint', return_value={'wine': 'test'}), \
+                 patch.object(wine, 'query_wine_registry', side_effect=query), \
+                 patch.object(desktop_integration, 'cjk_font_progress', progress):
+                wine.repair_cjk_aliases(prefix, show_progress=True)
+                wine.repair_cjk_aliases(prefix, show_progress=True)
+            self.assertEqual(events, ['open', 'query', 'close'])
+
+    def test_cached_check_invalidates_for_wine_prefix_and_alias_changes(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prefix = root / 'prefix'
+            font = prefix / 'drive_c/windows/Fonts/sourcehansans.ttc'
+            font.parent.mkdir(parents=True)
+            font.touch()
+            registry = prefix / 'user.reg'
+            registry.write_text('[Software\\\\Wine\\\\Fonts\\\\Replacements] 1\n"MS Gothic"="Source Han Sans"\n')
+            marker = prefix / '.update-timestamp'
+            marker.write_text('1')
+            binary = root / 'bin/wine'
+            binary.parent.mkdir()
+            binary.write_text('#!/bin/sh\nprintf "wine-test-1\\n"\n')
+            binary.chmod(0o755)
+            env = dict(os.environ, PATH=str(binary.parent))
+            with patch.object(wine, 'wine_env', return_value=env), \
+                 patch.object(wine, 'query_wine_registry', return_value='    MS Gothic    REG_SZ    Source Han Sans\n') as query:
+                wine.repair_cjk_aliases(prefix)
+                wine.repair_cjk_aliases(prefix)
+                self.assertEqual(query.call_count, 1)
+                registry.write_text('[Software\\\\Wine\\\\Fonts\\\\Replacements] 2\n"MS Gothic"="Custom"\n')
+                wine.repair_cjk_aliases(prefix)
+                self.assertEqual(query.call_count, 2)
+                marker.write_text('2')
+                wine.repair_cjk_aliases(prefix)
+                self.assertEqual(query.call_count, 3)
+                binary.write_text('#!/bin/sh\nprintf "wine-test-2\\n"\n')
+                wine.repair_cjk_aliases(prefix)
+                self.assertEqual(query.call_count, 4)
+
+    def test_failed_check_is_not_cached(self):
+        with TemporaryDirectory() as tmp:
+            prefix = Path(tmp)
+            font = prefix / 'drive_c/windows/Fonts/sourcehansans.ttc'
+            font.parent.mkdir(parents=True)
+            font.touch()
+            with patch.object(wine, 'wine_env', return_value={}), \
+                 patch.object(wine, 'cjk_cache_fingerprint', return_value={'wine': 'test'}), \
+                 patch.object(wine, 'query_wine_registry', side_effect=OSError('failed')), \
+                 patch('sys.stderr', new_callable=io.StringIO):
+                wine.repair_cjk_aliases(prefix)
+            self.assertFalse((prefix / '.musicbee-cjk-cache.json').exists())
+
+    def test_registry_query_does_not_wait_for_inherited_output(self):
+        with TemporaryDirectory() as tmp:
+            executable = Path(tmp) / 'wine'
+            executable.write_text('#!/bin/sh\n(sleep 4) &\nprintf "registry result\\n"\n')
+            executable.chmod(0o755)
+            env = dict(os.environ, PATH=tmp + os.pathsep + os.environ.get('PATH', ''))
+            start = time.monotonic()
+            result = wine.query_wine_registry('unused', env)
+            self.assertEqual(result, 'registry result\n')
+            self.assertLess(time.monotonic() - start, 3)
+
     def test_healthy_aliases_skip_font_enumeration(self):
         with TemporaryDirectory() as tmp:
             prefix = Path(tmp)
             font = prefix / 'drive_c/windows/Fonts/sourcehansans.ttc'
             font.parent.mkdir(parents=True)
             font.touch()
-            result = subprocess.CompletedProcess([], 0, '    MS Gothic    REG_SZ    Source Han Sans\n', '')
             with patch.object(wine, 'wine_env', return_value={}), \
-                 patch.object(subprocess, 'run', return_value=result) as run:
+                 patch.object(wine, 'query_wine_registry', return_value='    MS Gothic    REG_SZ    Source Han Sans\n') as run:
                 wine.repair_cjk_aliases(prefix)
             self.assertEqual(run.call_count, 1)
 
@@ -48,13 +179,12 @@ class CjkFallbackTests(unittest.TestCase):
             fonts = ('    Source Han Sans (TrueType)    REG_SZ    sourcehansans.ttc\n'
                      '    Source Han Sans SC (TrueType)    REG_SZ    sourcehansans.ttc\n'
                      '    WenQuanYi Zen Hei Sharp (TrueType)    REG_SZ    installed.ttf\n')
-            results = [subprocess.CompletedProcess([], 0, aliases, ''),
-                       subprocess.CompletedProcess([], 0, fonts, ''),
-                       subprocess.CompletedProcess([], 0, '', '')]
             with patch.object(wine, 'wine_env', return_value={}), \
-                 patch.object(subprocess, 'run', side_effect=results) as run:
+                 patch.object(wine, 'query_wine_registry', side_effect=[aliases, fonts]) as query, \
+                 patch.object(subprocess, 'run') as run:
                 wine.repair_cjk_aliases(prefix)
-            self.assertEqual(run.call_count, 3)
+            self.assertEqual(query.call_count, 2)
+            self.assertEqual(run.call_count, 1)
             self.assertEqual(run.call_args.args[0][-6:],
                              ['MS Gothic', '/t', 'REG_SZ', '/d', 'Source Han Sans', '/f'])
 
@@ -959,10 +1089,12 @@ class PortableExtractionTests(unittest.TestCase):
             with patch.object(sys, 'argv', ['musicbee-manage', 'desktop-launch']), \
                  patch.object(os, 'geteuid', return_value=1000), \
                  patch.dict(os.environ, {'MUSICBEE_DESKTOP_LOG_WORKER': '1'}), \
+                 patch.object(cli, 'create_parser', side_effect=AssertionError('desktop used the management parser')), \
                  patch.object(utils, 'locations', return_value={'app': app, 'state': app}), \
-                 patch.object(wine, 'run_musicbee', side_effect=settings.SetupError('Wine not found')), \
+                 patch.object(wine, 'run_musicbee', side_effect=settings.SetupError('Wine not found')) as run, \
                  patch.object(desktop_integration, 'show_desktop_error') as show:
                 self.assertEqual(cli.main(), 1)
+                self.assertTrue(run.call_args.kwargs['show_font_progress'])
                 show.assert_called_once_with(f'Wine not found\n\nLog: {app / "desktop-launch.log"}')
 
     def test_desktop_launch_reports_missing_musicbee(self):
@@ -984,16 +1116,39 @@ class PortableExtractionTests(unittest.TestCase):
                 return popen([sys.executable, '-c',
                               'import sys; sys.stdout.write("x" * (3 * 1024 * 1024))'], **kwargs)
             with patch.object(subprocess, 'Popen', side_effect=noisy_process):
-                self.assertEqual(desktop_integration.desktop_launch_with_log({'state': root}, []), 0)
+                self.assertEqual(launch_log.desktop_launch_with_log(root, []), 0)
             log = (root / 'desktop-launch.log').read_bytes()
             self.assertEqual(len(log), 2 * 1024 * 1024)
             self.assertTrue(log.endswith(b'[Log truncated at 2 MiB]\n'))
+
+    def test_desktop_log_keeps_timestamped_launches_and_rotates_at_limit(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            log = root / 'desktop-launch.log'
+            popen = subprocess.Popen
+
+            def launch_output(command, **kwargs):
+                return popen([sys.executable, '-c', 'import sys; print(sys.argv[1])', command[-1]], **kwargs)
+
+            with patch.object(subprocess, 'Popen', side_effect=launch_output):
+                for label in ('first', 'second'):
+                    self.assertEqual(launch_log.desktop_launch_with_log(root, [label]), 0)
+                history = log.read_text()
+                headers = [line for line in history.splitlines() if 'Desktop launch' in line]
+                self.assertEqual(len(headers), 2)
+                for header in headers:
+                    self.assertRegex(header, r'^\[\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d\] Desktop launch \(PID \d+\)$')
+                self.assertLess(history.index('first'), history.index('second'))
+                with patch.object(launch_log, '_DESKTOP_LOG_LIMIT', log.stat().st_size + 1):
+                    self.assertEqual(launch_log.desktop_launch_with_log(root, ['third']), 0)
+            self.assertIn('third', log.read_text())
+            self.assertEqual((root / 'desktop-launch.log.1').read_text(), history)
 
     def test_desktop_log_failure_does_not_prevent_launch(self):
         with TemporaryDirectory() as tmp:
             state = Path(tmp) / 'not-a-directory'
             state.write_text('file')
-            self.assertIsNone(desktop_integration.desktop_launch_with_log({'state': state}, []))
+            self.assertIsNone(launch_log.desktop_launch_with_log(state, []))
 
     def test_desktop_error_tries_available_dialogs(self):
         with patch.object(shutil, 'which', side_effect=lambda name: name if name in ('kdialog', 'zenity') else None), \

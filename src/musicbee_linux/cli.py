@@ -7,9 +7,6 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import zipfile
-
-from . import desktop, media_controls, settings, utils, wine
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -107,8 +104,8 @@ For installation and configuration, run musicbee-manage --help.
 
 def manage_command(args: argparse.Namespace, paths: dict[str, Path]) -> int:
     """Dispatch management commands, including the private desktop bridges."""
+    from . import desktop, downloads, media_controls, utils, wine
     from . import install as installation
-    from . import downloads
 
     with_args = {
         "music-dir": utils.configure_music_dir, "install": installation.install, "init": installation.first_launch,
@@ -130,14 +127,6 @@ def manage_command(args: argparse.Namespace, paths: dict[str, Path]) -> int:
         subprocess.Popen([sys.executable, str(utils.entrypoint()), "--manage", "desktop-launch", *args.files],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, start_new_session=True)
-    elif args.command == "desktop-launch":
-        if os.environ.get("MUSICBEE_DESKTOP_LOG_WORKER") != "1":
-            result = desktop.desktop_launch_with_log(paths, args.files)
-            if result is not None:
-                return result
-        if not (paths["app"] / "MusicBee.exe").is_file():
-            settings.die("MusicBee is not installed. Run musicbee-manage install in a terminal.")
-        wine.run_musicbee(argparse.Namespace(musicbee_args=args.files), paths)
     elif args.command == "tools-dispatch":
         desktop.dispatch_tool(args.name, args.files, paths)
     elif args.command == "explorer-dispatch":
@@ -145,8 +134,46 @@ def manage_command(args: argparse.Namespace, paths: dict[str, Path]) -> int:
     return 0
 
 
+def launch_from_desktop(arguments: list[str]) -> int:
+    from .settings import SetupError, die
+
+    parser = argparse.ArgumentParser(prog="musicbee-manage desktop-launch")
+    parser.add_argument("files", nargs=argparse.REMAINDER)
+    files = parser.parse_args(arguments).files
+    if os.geteuid() == 0:
+        print("Error: run as your desktop user, not root.", file=sys.stderr)
+        return 1
+    worker = os.environ.get("MUSICBEE_DESKTOP_LOG_WORKER") == "1"
+    log = None
+    try:
+        if not worker:
+            from .launch_log import desktop_launch_with_log
+            from .paths import state_directory
+
+            result = desktop_launch_with_log(state_directory(), files)
+            if result is not None:
+                return result
+        from . import utils, wine
+
+        paths = utils.locations()
+        if worker:
+            log = paths["state"] / "desktop-launch.log"
+        if not (paths["app"] / "MusicBee.exe").is_file():
+            die("MusicBee is not installed. Run musicbee-manage install in a terminal.")
+        wine.run_musicbee(argparse.Namespace(musicbee_args=files), paths, show_font_progress=True)
+        return 0
+    except (SetupError, OSError, subprocess.CalledProcessError, ValueError) as exc:
+        from .desktop import show_desktop_error
+
+        print(f"Error: {exc}", file=sys.stderr)
+        message = str(exc)
+        if log is not None:
+            message += f"\n\nLog: {log}"
+        show_desktop_error(message)
+        return 1
+
+
 def main() -> int:
-    parser = create_parser()
     arguments = sys.argv[1:]
     executable = Path(sys.argv[0]).name
     manager = executable in ("musicbee-manage", "musicbee-manage.py")
@@ -156,19 +183,26 @@ def main() -> int:
     elif executable == "musicbee-manage.py" and arguments and arguments[0] == "--launch":
         manager = False
         arguments = arguments[1:]
-    if arguments == ["--version"]:
-        print(wine.version_report(utils.locations()))
-        return 0
+    if manager and arguments[:1] == ["desktop-launch"]:
+        return launch_from_desktop(arguments[1:])
     if not manager and arguments in (["-h"], ["--help"]):
         print(LAUNCH_HELP, end="")
         return 0
-    args = parser.parse_args(arguments) if manager else None
-    if manager and args.version:
+    from . import settings, utils, wine
+    import zipfile
+
+    if arguments == ["--version"]:
         print(wine.version_report(utils.locations()))
         return 0
-    if manager and args.command is None:
-        parser.print_help()
-        return 0
+    if manager:
+        parser = create_parser()
+        args = parser.parse_args(arguments)
+        if args.version:
+            print(wine.version_report(utils.locations()))
+            return 0
+        if args.command is None:
+            parser.print_help()
+            return 0
     if os.geteuid() == 0:
         print("Error: run as your desktop user, not root.", file=sys.stderr)
         return 1
@@ -184,11 +218,6 @@ def main() -> int:
         return 0
     except (settings.SetupError, OSError, subprocess.CalledProcessError, zipfile.BadZipFile, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
-        if manager and args.command == "desktop-launch":
-            message = str(exc)
-            if os.environ.get("MUSICBEE_DESKTOP_LOG_WORKER") == "1":
-                message += f"\n\nLog: {paths['state'] / 'desktop-launch.log'}"
-            desktop.show_desktop_error(message)
         if manager and args.command == "desktop-setup" and sys.stdin.isatty():
             input("Press Enter to close this window.")
         return 1

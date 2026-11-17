@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import re
@@ -367,40 +368,32 @@ def show_desktop_error(message: str) -> None:
                 continue
 
 
-def desktop_launch_with_log(paths: dict[str, Path], files: list[str]) -> int | None:
-    """Capture desktop launch output, draining it even after the size limit."""
-    log = paths["state"] / "desktop-launch.log"
+@contextmanager
+def cjk_font_progress():
+    """Show an indeterminate progress window during the Wine font check."""
+    zenity = shutil.which('zenity') if os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY') else None
+    dialog = None
+    if zenity:
+        try:
+            dialog = subprocess.Popen(
+                [zenity, '--progress', '--pulsate', '--no-cancel', '--title=MusicBee',
+                 '--text=Checking and repairing fonts as needed…\nMusicBee will open when this finishes.'],
+                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            pass  # The window is optional even when a desktop session is available.
     try:
-        log.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    except OSError:
-        return None  # Logging must not prevent MusicBee from starting.
-    env = dict(os.environ, MUSICBEE_DESKTOP_LOG_WORKER="1")
-    command = [sys.executable, str(entrypoint()), "--manage", "desktop-launch", *files]
-    with os.fdopen(fd, "wb") as output:
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
-        marker = b"\n[Log truncated at 2 MiB]\n"
-        remaining = 2 * 1024 * 1024 - len(marker)
-        truncated = False
-        with process.stdout as stream:
-            while chunk := os.read(stream.fileno(), 65536):
-                if remaining:
-                    data = chunk[:remaining]
-                    try:
-                        output.write(data)
-                        output.flush()
-                    except OSError:
-                        remaining = 0
-                    else:
-                        remaining -= len(data)
-                if not remaining and not truncated:
-                    try:
-                        output.write(marker)
-                        output.flush()
-                    except OSError:
-                        pass
-                    truncated = True
-        return process.wait()
+        yield
+    finally:
+        if dialog is not None:
+            dialog.terminate()
+            try:
+                dialog.wait(timeout=0.25)
+            except subprocess.TimeoutExpired:
+                dialog.kill()
+                dialog.wait()
+            finally:
+                dialog.stdin.close()
 
 
 def regenerate_launcher(paths: dict[str, Path]) -> None:

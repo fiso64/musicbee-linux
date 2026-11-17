@@ -19,19 +19,12 @@ import tarfile
 import tempfile
 
 from .settings import die, read_config, write_config
-from .paths import matching_child, music_host_dir, parse_windows_path, update_mapping
-
-
-def entrypoint() -> Path:
-    executable = Path(sys.argv[0]).resolve()
-    if executable.name in ("musicbee", "musicbee-manage", "musicbee-manage.py") and executable.is_file():
-        return executable
-    return Path(__file__).resolve().parent.parent / "musicbee-manage.py"
+from .paths import entrypoint, matching_child, music_host_dir, parse_windows_path, state_directory, update_mapping
 
 
 def locations() -> dict[str, Path]:
     home = Path.home()
-    state = Path(os.environ.get("XDG_DATA_HOME", home / ".local/share")).expanduser() / "musicbee"
+    state = state_directory()
     prefix = state / "wineprefix"
     packaged = entrypoint() == Path("/usr/libexec/musicbee/musicbee-manage.py")
     launcher = Path("/usr/bin/musicbee") if packaged else home / ".local/bin/musicbee"
@@ -54,9 +47,17 @@ def maintenance_lock(prefix: Path, message: str):
         yield
 
 
-def call(command: list[str], env: dict[str, str] | None = None, cwd: Path | None = None) -> None:
+def call(command: list[str], env: dict[str, str] | None = None, cwd: Path | None = None,
+         on_started=None) -> None:
     print("+ " + " ".join(command), flush=True)
-    subprocess.run(command, check=True, env=env, cwd=cwd)
+    if on_started is None:
+        subprocess.run(command, check=True, env=env, cwd=cwd)
+    else:
+        with subprocess.Popen(command, env=env, cwd=cwd) as process:
+            on_started()
+            returncode = process.wait()
+        if returncode:
+            raise subprocess.CalledProcessError(returncode, command)
 
 
 def tab_settings_path(paths: dict[str, Path], selection: str | None) -> Path:

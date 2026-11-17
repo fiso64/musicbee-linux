@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import fcntl
+import hashlib
+import json
 import os
 import platform
 from pathlib import Path
@@ -12,9 +15,11 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
+import time
 
-from . import __version__
-from .settings import TWEAKS, SetupError, die, read_config, tweak_value, valid_tweak, write_config
+from . import __version__, timing
+from .settings import TWEAKS, SetupError, die, read_config, tweak_value, valid_tweak, write_config, write_json_atomic
 from .utils import call, locations, maintenance_lock, require_ready
 
 
@@ -171,39 +176,107 @@ _CJK_DEFAULTS = {
 }
 
 
-def repair_cjk_aliases(prefix: Path) -> None:
+def query_wine_registry(key: str, env: dict[str, str]) -> str:
+    # Wine helpers can inherit stdout/stderr and keep pipes open after reg exits.
+    # A temporary file lets us read the query as soon as the reg process exits.
+    with tempfile.TemporaryFile(mode='w+t', encoding='utf-8', errors='replace') as output:
+        subprocess.run(['wine', 'reg', 'query', key], env=env, stdout=output,
+                       stderr=subprocess.DEVNULL, check=True)
+        output.seek(0)
+        return output.read()
+
+
+def cjk_cache_fingerprint(prefix: Path, env: dict[str, str]) -> dict | None:
+    """Identify Wine and the persisted replacement values without starting a Wine session."""
+    try:
+        executable = shutil.which('wine', path=env['PATH'])
+        if not executable:
+            return None
+        exe = Path(executable).resolve(strict=True)
+        version = subprocess.run([executable, '--version'], env=env, stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL, text=True, check=True, timeout=5).stdout.strip()
+        if not version:
+            return None
+        def file_stamp(path: Path) -> list:
+            try:
+                st = path.stat()
+                return [str(path), st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
+            except FileNotFoundError:
+                return [str(path), None]
+        registry = (prefix / 'user.reg').read_bytes()
+        section = re.search(rb'(?m)^\[Software\\\\Wine\\\\Fonts\\\\Replacements\][^\n]*\n(.*?)(?=^\[|\Z)',
+                            registry, re.DOTALL)
+        if not section:
+            return None
+        # Ignore registry section timestamps, which change on ordinary Wine shutdowns.
+        values = b'\n'.join(line for line in section.group(1).splitlines() if line.startswith(b'"'))
+        return {'schema': 1, 'wine': version, 'exe': file_stamp(exe),
+                'inf': file_stamp(exe.parent.parent / 'share/wine/wine.inf'),
+                'prefix': file_stamp(prefix / '.update-timestamp'),
+                'aliases': hashlib.sha256(values).hexdigest()}
+    except (OSError, subprocess.SubprocessError, KeyError):
+        return None
+
+
+def repair_cjk_aliases(prefix: Path, *, show_progress: bool = False) -> None:
     """Restore Winetricks aliases replaced by Wine defaults for absent fonts."""
     if not (prefix / 'drive_c/windows/Fonts/sourcehansans.ttc').is_file():
         return
     env = wine_env(prefix)
+    cache_path = prefix / '.musicbee-cjk-cache.json'
+    fingerprint = cjk_cache_fingerprint(prefix, env)
+    if fingerprint is not None:
+        try:
+            if json.loads(cache_path.read_text(encoding='utf-8')) == fingerprint:
+                return
+        except (OSError, ValueError):
+            pass
+    if show_progress:
+        from .desktop import cjk_font_progress
+        progress = cjk_font_progress()
+    else:
+        progress = nullcontext()
+    with progress:
+        _check_cjk_aliases(prefix, env, cache_path)
+
+
+def _check_cjk_aliases(prefix: Path, env: dict[str, str], cache_path: Path) -> None:
     replacements = r'HKCU\Software\Wine\Fonts\Replacements'
     fonts = r'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Fonts'
     try:
-        aliases = subprocess.run(['wine', 'reg', 'query', replacements], env=env,
-                                 capture_output=True, text=True, check=True)
+        aliases = query_wine_registry(replacements, env)
         candidates = []
-        for line in aliases.stdout.splitlines():
+        for line in aliases.splitlines():
             match = re.match(r'^\s+(.+?)\s+REG_SZ\s+(.+?)\s*$', line)
             if match and match.group(1) in _CJK_DEFAULTS:
                 name, value = match.groups()
                 default, fallback = _CJK_DEFAULTS[name]
                 if value.casefold() == default.casefold():
                     candidates.append((name, default, fallback))
-        if not candidates:
-            return
-        installed = subprocess.run(['wine', 'reg', 'query', fonts], env=env,
-                                   capture_output=True, text=True, check=True)
+        installed = query_wine_registry(fonts, env) if candidates else ''
         # Match whole registry value names: a similarly named face is not enough.
         font_names = set()
-        for line in installed.stdout.splitlines():
+        for line in installed.splitlines():
             match = re.match(r'^\s+(.+?)\s+REG_\w+\s+', line)
             if match:
                 font_names.add(re.sub(r' \(TrueType\)$', '', match.group(1), flags=re.I).casefold())
+        cacheable = True
         for name, default, fallback in candidates:
             if default.casefold() not in font_names and fallback.casefold() in font_names:
                 subprocess.run(['wine', 'reg', 'add', replacements, '/v', name, '/t', 'REG_SZ',
-                                '/d', fallback, '/f'], env=env, capture_output=True, text=True, check=True)
+                                '/d', fallback, '/f'], env=env, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, check=True)
                 print(f'Restored CJK font fallback for {name}.')
+            else:
+                # Installed fonts can later disappear; recheck their availability.
+                cacheable = False
+        if cacheable:
+            updated = cjk_cache_fingerprint(prefix, env)
+            if updated is not None:
+                try:
+                    write_json_atomic(cache_path, updated)
+                except OSError:
+                    pass  # An unwritable cache must not prevent MusicBee starting.
     except (OSError, subprocess.SubprocessError) as exc:
         print(f'Warning: could not check CJK font fallbacks: {exc}', file=sys.stderr)
 
@@ -353,9 +426,11 @@ def musicbee_arguments(arguments: list[str], prefix: Path) -> list[str]:
     return result
 
 
-def run_musicbee(args: argparse.Namespace, paths: dict[str, Path]) -> None:
+def run_musicbee(args: argparse.Namespace, paths: dict[str, Path], *, show_font_progress: bool = False) -> None:
     from .desktop import configure_explorer_redirect, refresh_tool_bridges
 
+    launch_start = timing.started_ns()
+    prepare_start = time.monotonic_ns()
     prefix, app = paths["prefix"], paths["app"]
     require_ready(prefix)
     config = read_config(paths["state"])
@@ -397,9 +472,22 @@ def run_musicbee(args: argparse.Namespace, paths: dict[str, Path]) -> None:
             apply_windows_version(version, prefix)
             config.setdefault("tweaks", {})["windows-version"] = version
             write_config(paths["state"], config)
-        repair_cjk_aliases(prefix)
+        fonts_start = time.monotonic_ns()
+        repair_cjk_aliases(prefix, show_progress=show_font_progress)
+        integration_start = time.monotonic_ns()
         refresh_tool_bridges(paths, config)
         configure_explorer_redirect(paths, tweak_value(config, "native-file-manager") == "on")
+        arguments = musicbee_arguments(args.musicbee_args, prefix)
         with (prefix / ".musicbee.active.lock").open("a+") as active:
             fcntl.flock(active, fcntl.LOCK_EX)
-            call(["wine", "MusicBee.exe", *musicbee_arguments(args.musicbee_args, prefix)], env=env, cwd=app)
+            spawn_start = time.monotonic_ns()
+            def report_launch() -> None:
+                end = time.monotonic_ns()
+                ms = lambda start, finish: (finish - start) / 1_000_000
+                print(f"Launch timing: total={ms(launch_start, end):.0f}ms "
+                      f"(startup={ms(launch_start, prepare_start):.0f}ms, "
+                      f"prepare={ms(prepare_start, fonts_start):.0f}ms, "
+                      f"fonts={ms(fonts_start, integration_start):.0f}ms, "
+                      f"integration={ms(integration_start, spawn_start):.0f}ms, "
+                      f"spawn={ms(spawn_start, end):.0f}ms)", flush=True)
+            call(["wine", "MusicBee.exe", *arguments], env=env, cwd=app, on_started=report_launch)
