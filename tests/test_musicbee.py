@@ -22,6 +22,48 @@ from musicbee_linux import __version__
 
 
 
+class CjkFallbackTests(unittest.TestCase):
+    def test_healthy_aliases_skip_font_enumeration(self):
+        with TemporaryDirectory() as tmp:
+            prefix = Path(tmp)
+            font = prefix / 'drive_c/windows/Fonts/sourcehansans.ttc'
+            font.parent.mkdir(parents=True)
+            font.touch()
+            result = subprocess.CompletedProcess([], 0, '    MS Gothic    REG_SZ    Source Han Sans\n', '')
+            with patch.object(wine, 'wine_env', return_value={}), \
+                 patch.object(subprocess, 'run', return_value=result) as run:
+                wine.repair_cjk_aliases(prefix)
+            self.assertEqual(run.call_count, 1)
+
+    def test_repairs_only_missing_wine_defaults_with_available_fallback(self):
+        with TemporaryDirectory() as tmp:
+            prefix = Path(tmp)
+            font = prefix / 'drive_c/windows/Fonts/sourcehansans.ttc'
+            font.parent.mkdir(parents=True)
+            font.touch()
+            aliases = ('    MS Gothic    REG_SZ    VL Gothic\n'
+                       '    MS UI Gothic    REG_SZ    Custom Font\n'
+                       '    SimSun    REG_SZ    WenQuanYi Zen Hei Sharp\n'
+                       '    Gulim    REG_SZ    NanumGothic\n')
+            fonts = ('    Source Han Sans (TrueType)    REG_SZ    sourcehansans.ttc\n'
+                     '    Source Han Sans SC (TrueType)    REG_SZ    sourcehansans.ttc\n'
+                     '    WenQuanYi Zen Hei Sharp (TrueType)    REG_SZ    installed.ttf\n')
+            results = [subprocess.CompletedProcess([], 0, aliases, ''),
+                       subprocess.CompletedProcess([], 0, fonts, ''),
+                       subprocess.CompletedProcess([], 0, '', '')]
+            with patch.object(wine, 'wine_env', return_value={}), \
+                 patch.object(subprocess, 'run', side_effect=results) as run:
+                wine.repair_cjk_aliases(prefix)
+            self.assertEqual(run.call_count, 3)
+            self.assertEqual(run.call_args.args[0][-6:],
+                             ['MS Gothic', '/t', 'REG_SZ', '/d', 'Source Han Sans', '/f'])
+
+    def test_missing_source_font_does_not_modify_prefix(self):
+        with TemporaryDirectory() as tmp, patch.object(subprocess, 'run') as run:
+            wine.repair_cjk_aliases(Path(tmp))
+            run.assert_not_called()
+
+
 class PortableExtractionTests(unittest.TestCase):
     def setUp(self):
         patcher = patch.object(installation, 'ensure_aac_decoder')

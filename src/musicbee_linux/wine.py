@@ -157,6 +157,57 @@ def wine_env(prefix: Path, *, init: bool = False) -> dict[str, str]:
     return env
 
 
+_CJK_DEFAULTS = {
+    "SimSun": ("WenQuanYi Zen Hei Sharp", "Source Han Sans SC"),
+    "PMingLiU": ("WenQuanYi Zen Hei Sharp", "Source Han Sans TC"),
+    "MS Gothic": ("VL Gothic", "Source Han Sans"),
+    "MS PGothic": ("VL PGothic", "Source Han Sans"),
+    "MS UI Gothic": ("VL Gothic", "Source Han Sans"),
+    "MS Mincho": ("IPAMincho", "Source Han Sans"),
+    "MS PMincho": ("IPAPMincho", "Source Han Sans"),
+    "Batang": ("NanumMyeongjo", "Source Han Sans K"),
+    "Dotum": ("NanumGothic", "Source Han Sans K"),
+    "Gulim": ("NanumGothic", "Source Han Sans K"),
+}
+
+
+def repair_cjk_aliases(prefix: Path) -> None:
+    """Restore Winetricks aliases replaced by Wine defaults for absent fonts."""
+    if not (prefix / 'drive_c/windows/Fonts/sourcehansans.ttc').is_file():
+        return
+    env = wine_env(prefix)
+    replacements = r'HKCU\Software\Wine\Fonts\Replacements'
+    fonts = r'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Fonts'
+    try:
+        aliases = subprocess.run(['wine', 'reg', 'query', replacements], env=env,
+                                 capture_output=True, text=True, check=True)
+        candidates = []
+        for line in aliases.stdout.splitlines():
+            match = re.match(r'^\s+(.+?)\s+REG_SZ\s+(.+?)\s*$', line)
+            if match and match.group(1) in _CJK_DEFAULTS:
+                name, value = match.groups()
+                default, fallback = _CJK_DEFAULTS[name]
+                if value.casefold() == default.casefold():
+                    candidates.append((name, default, fallback))
+        if not candidates:
+            return
+        installed = subprocess.run(['wine', 'reg', 'query', fonts], env=env,
+                                   capture_output=True, text=True, check=True)
+        # Match whole registry value names: a similarly named face is not enough.
+        font_names = set()
+        for line in installed.stdout.splitlines():
+            match = re.match(r'^\s+(.+?)\s+REG_\w+\s+', line)
+            if match:
+                font_names.add(re.sub(r' \(TrueType\)$', '', match.group(1), flags=re.I).casefold())
+        for name, default, fallback in candidates:
+            if default.casefold() not in font_names and fallback.casefold() in font_names:
+                subprocess.run(['wine', 'reg', 'add', replacements, '/v', name, '/t', 'REG_SZ',
+                                '/d', fallback, '/f'], env=env, capture_output=True, text=True, check=True)
+                print(f'Restored CJK font fallback for {name}.')
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f'Warning: could not check CJK font fallbacks: {exc}', file=sys.stderr)
+
+
 def apply_font_tweak(name: str, value: str, prefix: Path) -> None:
     if name == "allfonts" and value == "off":
         return
@@ -296,6 +347,7 @@ def run_musicbee(args: argparse.Namespace, paths: dict[str, Path]) -> None:
             apply_windows_version(version, prefix)
             config.setdefault("tweaks", {})["windows-version"] = version
             write_config(paths["state"], config)
+        repair_cjk_aliases(prefix)
         refresh_tool_bridges(paths, config)
         configure_explorer_redirect(paths, tweak_value(config, "native-file-manager") == "on")
         with (prefix / ".musicbee.active.lock").open("a+") as active:
