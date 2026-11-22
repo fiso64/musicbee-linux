@@ -18,7 +18,18 @@ musicbee-manage config gdiplus            # describe a setting
 musicbee-manage config audio-latency on   # example: sometimes useful against stuttering
 ```
 
-## Known problems
+## Known problems & fixes
+
+### MusicBee is too small on some desktop environments
+
+Increase the DPI. For example, for 200% size, set
+```bash
+musicbee-manage config dpi 192
+```
+
+### MusicBee has a stray eplorer.exe window on some desktop environments
+
+This happens when your desktop environment does not support tray icons. Disable MusicBee's tray icon in the settings (`General > Always show tray icon`).
 
 ### Dragging tabs to rearrange them fails
 Close MusicBee, then list and rearrange the saved tabs:
